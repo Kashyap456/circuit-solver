@@ -1,10 +1,17 @@
 module Circuit
-  ( Circuit,
-    Node,
-    Component,
-    ComponentType,
-    Var,
-    Unknown,
+  ( Circuit (Circuit),
+    Node (Node),
+    Component (Component),
+    ComponentType (..),
+    Var (..),
+    Unknown (..),
+    nodeID,
+    nodePos,
+    nodeNeg,
+    componentID,
+    validate,
+    nodes,
+    components,
   )
 where
 
@@ -14,7 +21,7 @@ import Prelude
 data Unknown
   = NodeVoltage String -- for nodes
   | Parameter String -- for components
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)
 
 data Var
   = Known Double
@@ -39,14 +46,16 @@ data Component = Component
   deriving (Show, Eq)
 
 data Node = Node
-  { nID :: String,
+  { nodeID :: String,
     nodeVoltage :: Var
   }
+  deriving (Show, Eq)
 
 data Circuit = Circuit
   { nodes :: Map String Node,
-    components :: Map String Component
+    components :: [Component]
   }
+  deriving (Show, Eq)
 
 -- validation function
 -- gets rid of any floating nodes

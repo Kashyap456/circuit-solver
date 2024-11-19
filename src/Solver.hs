@@ -27,5 +27,5 @@ getEquations = undefined
 equationsToMatrix :: [Equation] -> (LA.Matrix Double, LA.Vector Double)
 equationsToMatrix = undefined
 
-solve :: Circuit -> Map String Double
+solve :: Circuit -> Map Unknown Double
 solve = undefined -- will use the getEquations helper above
