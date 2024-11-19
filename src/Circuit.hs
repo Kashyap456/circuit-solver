@@ -1,14 +1,15 @@
-module Circuit (
-  Circuit,
-  Node,
-  Component,
-  ComponentType,
-  Var,
-  Unknown
-) where
+module Circuit
+  ( Circuit,
+    Node,
+    Component,
+    ComponentType,
+    Var,
+    Unknown,
+  )
+where
 
-import Prelude
 import Data.Map
+import Prelude
 
 data Unknown
   = NodeVoltage String -- for nodes

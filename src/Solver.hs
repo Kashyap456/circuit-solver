@@ -1,3 +1,5 @@
+module Solver where
+
 import Circuit (Circuit, Unknown)
 import Data.Map
 import Numeric.LinearAlgebra qualified as LA
@@ -22,7 +24,7 @@ simplify = undefined
 getEquations :: Circuit -> [Equation]
 getEquations = undefined
 
-equationsToMatrix :: [Equation] -> (LA.Matrix, LA.Vector)
+equationsToMatrix :: [Equation] -> (LA.Matrix Double, LA.Vector Double)
 equationsToMatrix = undefined
 
 solve :: Circuit -> Map String Double
