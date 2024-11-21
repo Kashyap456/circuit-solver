@@ -62,3 +62,8 @@ data Circuit = Circuit
 -- fails if components use a node that doesn't exist
 validate :: Circuit -> Maybe Circuit
 validate = undefined
+
+
+-- Create circuit from a YAML file
+parseCircuit :: String -> Maybe Circuit
+parseCircuit = undefined
