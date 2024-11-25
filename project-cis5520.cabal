@@ -34,6 +34,7 @@ common common-stanza
     , doctest
     , hmatrix
     , parsec
+    , text
   default-language:
     GHC2021
   default-extensions:
@@ -62,7 +63,8 @@ executable project-cis5520-exe
   build-depends:
       project-cis5520,
       hmatrix,
-      parsec
+      parsec,
+      text
 
 
 test-suite project-cis5520-test
@@ -78,5 +80,6 @@ test-suite project-cis5520-test
   build-depends:
       project-cis5520,
       hmatrix,
-      parsec
+      parsec,
+      text
 
