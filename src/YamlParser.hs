@@ -10,6 +10,9 @@ import System.IO.Error qualified as IO
 import Text.Parsec (ParsecT, many1, modifyState, noneOf, putState, runParserT)
 import Text.Parsec.String
 import Text.ParserCombinators.Parsec
+import Text.Parsec.Char (char)
+import Control.Monad (guard)
+import Data.Text (stripEnd)
 
 -- Keep track of the number of indents that are made
 type Indentation = Int
@@ -24,11 +27,30 @@ data YAMLValue
 
 type IParser = ParsecT String Indentation Identity
 
+-- Parses white space.
+parseWS :: IParser String
+parseWS = many (satisfy isSpace)
+
+-- Parses the indention of a string and updates the state.
 parseIndentation :: IParser String
 parseIndentation = do
-  sp <- many (satisfy isSpace)
+  sp <- parseWS
   putState (length sp)
   return sp
+
+-- Parses the indentation of a string and compares it against the state.
+-- Used to check if this line is a continution of the previous (only succeed if
+-- the indentation is greater)
+checkIndentation :: IParser String
+checkIndentation = do
+  sp <- parseWS
+  st <- getState
+  guard (length sp > st)
+  return sp
+
+-- Parse text until the newline character.
+parseLine :: IParser String
+parseLine = many (satisfy (/= '\n')) <* char '\n'
 
 parseString :: IParser YAMLValue
 parseString = undefined
@@ -50,6 +72,3 @@ parseMap = undefined
 parseYAMLFile :: String -> Either (ParseError, YAMLValue)
 parseYAMLFile fn = runParserT parseMap 0 fn
 -}
-
-parseYAMLFile :: String -> Identity (Either ParseError YAMLValue)
-parseYAMLFile = runParserT parseMap 0 "stdout"
