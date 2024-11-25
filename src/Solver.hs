@@ -17,7 +17,7 @@ data Equation
   }
 
 -- Simplify the current equation if possible
-simplify :: Equation -> Equation
+simplify :: Circuit -> Circuit
 simplify = undefined
 
 -- Traverses the circuit and generates KVL and KCL equations

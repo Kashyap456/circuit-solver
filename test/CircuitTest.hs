@@ -18,23 +18,23 @@ import Test.QuickCheck
     (.&&.),
   )
 
-genNodeID :: Gen String
+genNodeID :: Gen NodeID
 genNodeID = do
   prefix <- elements ["n", "node"]
   num <- chooseInt (1, 20)
-  return $ prefix ++ show num
+  return $ NodeID $ prefix ++ show num
 
-genComponentID :: Gen String
+genComponentID :: Gen ComponentID
 genComponentID = do
   prefix <- elements ["v", "r", "vs", "res"]
   num <- chooseInt (1, 15)
-  return $ prefix ++ show num
+  return $ ComponentID $ prefix ++ show num
 
 genValue :: Gen Var
 genValue =
   oneof
     [ Known <$> choose (-24, 24),
-      Unknown . Parameter <$> do
+      Unknown . Parameter . ComponentID <$> do
         prefix <- elements ["p", "param"]
         num <- chooseInt (1, 10)
         return $ prefix ++ show num
@@ -88,7 +88,8 @@ instance Arbitrary Circuit where
                 [ (1, VSource <$> genValue),
                   (3, Resistor . Known <$> choose (1, 1000))
                 ]
-            let curr = Unknown . Parameter $ "i_" ++ cid
+            let ComponentID cstr = cid
+                curr = Unknown . Parameter . ComponentID $ "i_" ++ cstr
             return $
               Component
                 cid
@@ -118,7 +119,8 @@ instance Arbitrary Circuit where
           [ (1, VSource <$> genValue),
             (3, Resistor . Known <$> choose (1, 1000))
           ]
-      let curr = Unknown . Parameter $ "i_" ++ cid
+      let ComponentID cstr = cid
+          curr = Unknown . Parameter . ComponentID $ "i_" ++ cstr
       -- Ensure at least one end is from the main loop
       pos <- elements loopNodeIDSet -- First end must be from loop
       neg <- elements $ filter (/= pos) allNodeIDs -- Second can be from any node

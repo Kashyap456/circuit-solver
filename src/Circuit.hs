@@ -5,6 +5,8 @@ module Circuit
     ComponentType (..),
     Var (..),
     Unknown (..),
+    NodeID (..),
+    ComponentID (..),
     nodeID,
     nodePos,
     nodeNeg,
@@ -18,9 +20,13 @@ where
 import Data.Map
 import Prelude
 
+newtype NodeID = NodeID String deriving (Show, Eq, Ord)
+
+newtype ComponentID = ComponentID String deriving (Show, Eq, Ord)
+
 data Unknown
-  = NodeVoltage String -- for nodes
-  | Parameter String -- for components
+  = NodeVoltage NodeID -- for nodes
+  | Parameter ComponentID -- for components
   deriving (Show, Eq, Ord)
 
 data Var
@@ -37,22 +43,22 @@ wire :: ComponentType
 wire = Resistor (Known 0.0)
 
 data Component = Component
-  { componentID :: String,
+  { componentID :: ComponentID,
     componentType :: ComponentType,
     current :: Var,
-    nodePos :: String, -- node ID
-    nodeNeg :: String -- node ID
+    nodePos :: NodeID,
+    nodeNeg :: NodeID
   }
   deriving (Show, Eq)
 
 data Node = Node
-  { nodeID :: String,
+  { nodeID :: NodeID,
     nodeVoltage :: Var
   }
   deriving (Show, Eq)
 
 data Circuit = Circuit
-  { nodes :: Map String Node,
+  { nodes :: Map NodeID Node,
     components :: [Component]
   }
   deriving (Show, Eq)
@@ -62,7 +68,6 @@ data Circuit = Circuit
 -- fails if components use a node that doesn't exist
 validate :: Circuit -> Maybe Circuit
 validate = undefined
-
 
 -- Create circuit from a YAML file
 parseCircuit :: String -> Maybe Circuit
