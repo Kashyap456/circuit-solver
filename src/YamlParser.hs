@@ -12,7 +12,9 @@ import Text.Parsec.String
 import Text.ParserCombinators.Parsec
 import Text.Parsec.Char (char)
 import Control.Monad (guard)
-import Data.Text (stripEnd)
+import Data.Text (stripEnd, pack, unpack)
+import Data.Text.Read (double)
+import Text.Read
 
 -- Keep track of the number of indents that are made
 type Indentation = Int
@@ -50,13 +52,34 @@ checkIndentation = do
 
 -- Parse text until the newline character.
 parseLine :: IParser String
-parseLine = many (satisfy (/= '\n')) <* char '\n'
+parseLine = do
+  sp <- parseWS
+  text <- many (satisfy (/= '\n'))
+  nl <- char '\n'
+  return (unpack (stripEnd (pack text)))
+
+tryParseLine :: IParser String
+tryParseLine = do
+  checkIndentation
+  parseLine
+
+-- Parse as long as indentation does not match the initial indentation
+parseLines :: IParser String
+parseLines = do
+  sp <- parseIndentation
+  fst <- parseLine
+  rst <- many tryParseLine
+  return (unwords (fst : rst))
 
 parseString :: IParser YAMLValue
-parseString = undefined
+parseString = YAMLString <$> parseLines
 
 parseDouble :: IParser YAMLValue
-parseDouble = undefined
+parseDouble = do
+  line <- parseLines
+  case readMaybe line :: Maybe Double of
+    Just d -> return (YAMLDouble d)
+    Nothing -> fail "Not double"
 
 parseList :: IParser YAMLValue
 parseList = undefined
@@ -69,6 +92,15 @@ parseMap = undefined
 
 -- checkFileContents :: String -> IO (Either IO String IO String)
 {-
-parseYAMLFile :: String -> Either (ParseError, YAMLValue)
-parseYAMLFile fn = runParserT parseMap 0 fn
+parseYAMLFile :: String -> Identity (Either ParseError YAMLValue)
+parseYAMLFile = runParserT parseMap 0 "stdout"
+
+containsNewLine :: String -> Bool
+containsNewLine = foldr (\x acc -> (x == '\n') || acc) False
 -}
+
+test :: FilePath -> IO (Either ParseError String)
+test filename = do
+  handle <- IO.openFile filename IO.ReadMode
+  str <- IO.hGetContents handle
+  pure $ runParser parseLine 0 "" str
