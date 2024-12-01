@@ -129,7 +129,7 @@ instance Arbitrary Circuit where
     return $
       Circuit
         (Map.fromList [(nodeID n, n) | n <- allNodes])
-        (loopComponents ++ extraComponents)
+        (Map.fromList [(componentID c, c) | c <- loopComponents ++ extraComponents])
 
 -- Properties
 
@@ -160,4 +160,4 @@ prop_validatePreservesStructure c =
       nodes c'
         `Map.isSubmapOf` nodes c
         .&&. components c'
-        `List.isSubsequenceOf` components c
+        `Map.isSubmapOf` components c

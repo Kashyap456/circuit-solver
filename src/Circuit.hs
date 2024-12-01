@@ -14,6 +14,9 @@ module Circuit
     validate,
     nodes,
     components,
+    componentType,
+    current,
+    nodeVoltage,
   )
 where
 
@@ -59,7 +62,7 @@ data Node = Node
 
 data Circuit = Circuit
   { nodes :: Map NodeID Node,
-    components :: [Component]
+    components :: Map ComponentID Component
   }
   deriving (Show, Eq)
 

@@ -45,6 +45,7 @@ library
       common-stanza
   exposed-modules:
       Circuit,
+      CircuitGraph,
       Solver,
       YamlParser
       -- if you add modules to your project, list them here
