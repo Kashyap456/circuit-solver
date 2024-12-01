@@ -57,7 +57,9 @@ nodeToKCLEquation circuit node =
   Equation
     { lhs =
         Sum
-          [ componentCurrent True comp | comp <- Map.elems (components circuit), nodePos comp == nodeID node || nodeNeg comp == nodeID node
+          [ componentCurrent (nodePos comp == nodeID node) comp
+            | comp <- Map.elems (components circuit),
+              nodePos comp == nodeID node || nodeNeg comp == nodeID node
           ],
       rhs = Constant 0.0
     }
