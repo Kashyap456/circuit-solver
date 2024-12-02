@@ -5,17 +5,19 @@ import Control.Monad (guard, when, unless)
 import Control.Monad.Identity (Identity)
 import Control.Monad.State
 import Data.Char
-import Data.Map (Map, fromList)
+import Data.Map (Map, fromList, valid)
 import Data.Text (pack, stripEnd, unpack)
 import Data.Text.Read (double)
 import System.IO qualified as IO
 import System.IO.Error qualified as IO
-import Text.Parsec (ParsecT, many1, modifyState, noneOf, putState, runParserT)
+import Text.Parsec (ParsecT, many1, modifyState, noneOf, putState, runParserT, parserTrace, unknownError)
 import Text.Parsec.Char (char)
 import Text.Parsec.String
 import Text.ParserCombinators.Parsec
 import Text.Read
 import GHC.Base (IP)
+import Text.Parsec.Error (newErrorMessage, Message (..))
+import Control.Monad.Except (Except)
 
 -- Keep track of the number of indents that are made
 type Indentation = Int
@@ -31,13 +33,45 @@ data YAMLValue
 
 type IParser = ParsecT String Indentation Identity
 
--- Parses white space (that isn't \n).
-parseWS :: IParser String
-parseWS = many (satisfy (\c -> c /= '\n' && isSpace c))
+type IParser' = ParsecT String Indentation (Except String)
+
+--- HELPERS ---
 
 -- Remove trailing whitespace.
 trim :: String -> String
 trim s = unpack $ stripEnd $ pack s
+
+-- Check if a character is not a special character.
+validChar :: Char -> Bool
+validChar c = c /= '\n' && c /= '-' && c /= ':'
+
+--- CHAR PARSERS ---
+
+-- Parses a single space (that isn't \n)
+parseSpace :: IParser Char
+parseSpace = satisfy (\c -> c /= '\n' && isSpace c)
+
+parseEOF :: IParser Char
+parseEOF = do
+  eof
+  return '\n'
+
+parseEnd :: IParser Char
+parseEnd = try (char '\n') <|> try parseEOF
+
+--- STRING PARSERS ---
+
+-- Parses white space (that isn't \n).
+parseWS :: IParser String
+parseWS = many (try parseSpace)
+
+-- Parse text until the newline character.
+parseLine :: IParser String
+parseLine = do
+  sp <- parseWS
+  text <- many1 (try (satisfy validChar))
+  try parseEnd
+  return (trim text)
 
 -- Parses the indention of a string and updates the state.
 parseIndentation :: IParser String
@@ -46,31 +80,28 @@ parseIndentation = do
   putState (length sp)
   return sp
 
+-- Parses the indentation of a string and compares it against the state.
+checkIndentation :: IParser String
+checkIndentation = do
+  st <- getState
+  sp <- parseWS
+  if length sp == st then return sp
+    else fail "Mismatch Indentation"
+
+--- YAMLValue Parsers ---
+
+-- Parses till it reaches a new line or EOF.
 parseEmpty :: IParser YAMLValue
 parseEmpty = do
   parseWS
-  char '\n'
+  many (try (parseWS *> parseEnd))
   return YAMLNull
 
--- Parses the indentation of a string and compares it against the state.
-checkIndentation :: (Indentation -> Indentation -> Bool) -> IParser String
-checkIndentation f = do
-  sp <- parseWS
-  st <- getState
-  guard (f (length sp) st)
-  return sp
-
--- Parse text until the newline character.
-parseLine :: IParser String
-parseLine = do
-  sp <- parseWS
-  text <- many1 (satisfy (/= '\n'))
-  nl <- char '\n'
-  return (trim text)
-
+-- Parses a string.
 parseString :: IParser YAMLValue
 parseString = YAMLString <$> parseLine
 
+-- Parses a double. Throws error if read value cannot be converted.
 parseDouble :: IParser YAMLValue
 parseDouble = do
   line <- parseLine
@@ -78,55 +109,60 @@ parseDouble = do
     Just d -> return (YAMLDouble d)
     Nothing -> fail "Not double"
 
+-- Parses a single item within a YAML list.
 parseListItem :: IParser YAMLValue
 parseListItem = do
   char '-'
   ws <- parseWS
   s <- getState
   modifyState (+ (1 + length ws))
-  res <- parseYAML
+  res <- try (parseYAML False)
   putState s
   return res
 
-parseList :: IParser YAMLValue
-parseList = do
-  parseIndentation
+-- Parses a YAML list.
+parseList :: Bool -> IParser YAMLValue
+parseList setIndentation = do
+  s <- getState
+  if setIndentation then parseIndentation else parseWS
   fst <- parseListItem
-  rst <- many (checkIndentation (==) *> parseListItem)
+  rst <- many (try checkIndentation *> parseListItem)
+  putState s
   return (YAMLList (fst : rst))
 
-parseYAML :: IParser YAMLValue
-parseYAML = do
-  res <- try parseList <|> try (parseMap False) <|> try parseDouble <|> try parseString <|> parseEmpty
-  if res /= YAMLNull then return res else parseYAML
-
-parseKeyValue :: Bool -> IParser (String, YAMLValue)
-parseKeyValue fst = do
-  if fst then parseWS else checkIndentation (==)
-  key <- many (satisfy (\c -> c /= ':' && c /= '\n'))
+-- Parses a single key-value pair within a YAML map.
+parseKeyValue :: IParser (String, YAMLValue)
+parseKeyValue = do
+  key <- many1 (try (satisfy validChar))
   char ':'
-  value <- parseYAML
+  ws <- try parseWS
+  value <- try (parseYAML True)
   return (trim key, value)
 
+-- Parses a YAML map.
 parseMap :: Bool -> IParser YAMLValue
 parseMap setIndentation = do
+  s <- getState
   if setIndentation then parseIndentation else parseWS
-  fst <- parseKeyValue True
-  res <- many (parseKeyValue False)
-  return (YAMLMap (fromList (fst : res)))
+  fst <- parseKeyValue
+  rst <- many (try checkIndentation *> parseKeyValue)
+  putState s
+  return (YAMLMap (fromList (fst : rst)))
 
+-- Attempts to parse all possible YAML values.
+parseYAML :: Bool -> IParser YAMLValue
+parseYAML setIndentation = do
+  many (try (parseWS <* parseEnd))
+  try (parseList setIndentation) <|>
+    try (parseMap setIndentation) <|>
+    try parseDouble <|>
+    try parseString <|>
+    try parseEmpty
 
--- checkFileContents :: String -> IO (Either IO String IO String)
-{-
-parseYAMLFile :: String -> Identity (Either ParseError YAMLValue)
-parseYAMLFile = runParserT parseMap 0 "stdout"
-
-containsNewLine :: String -> Bool
-containsNewLine = foldr (\x acc -> (x == '\n') || acc) False
--}
-
-test :: FilePath -> IO (Either ParseError String)
-test filename = do
+-- Parses the given YAML file.
+parseYAMLFile :: FilePath -> IO (Either ParseError YAMLValue)
+parseYAMLFile filename = do
   handle <- IO.openFile filename IO.ReadMode
   str <- IO.hGetContents handle
-  pure $ runParser parseLine 0 "" str
+  if null str then return (Right YAMLNull) 
+    else pure $ runParser (parseYAML True <* eof) 0 "" str
