@@ -1,23 +1,14 @@
 module YamlParser where
 
-import Circuit (Circuit, Component, Node)
-import Control.Monad (guard, when, unless)
+import Control.Monad.Except (Except)
 import Control.Monad.Identity (Identity)
-import Control.Monad.State
 import Data.Char
-import Data.Map (Map, fromList, valid)
+import Data.Map (Map, fromList)
 import Data.Text (pack, stripEnd, unpack)
-import Data.Text.Read (double)
 import System.IO qualified as IO
-import System.IO.Error qualified as IO
-import Text.Parsec (ParsecT, many1, modifyState, noneOf, putState, runParserT, parserTrace, unknownError)
-import Text.Parsec.Char (char)
-import Text.Parsec.String
+import Text.Parsec (ParsecT, modifyState, putState, runParserT)
 import Text.ParserCombinators.Parsec
 import Text.Read
-import GHC.Base (IP)
-import Text.Parsec.Error (newErrorMessage, Message (..))
-import Control.Monad.Except (Except)
 
 -- Keep track of the number of indents that are made
 type Indentation = Int
@@ -85,7 +76,8 @@ checkIndentation :: IParser String
 checkIndentation = do
   st <- getState
   sp <- parseWS
-  if length sp == st then return sp
+  if length sp == st
+    then return sp
     else fail "Mismatch Indentation"
 
 --- YAMLValue Parsers ---
@@ -153,16 +145,35 @@ parseMap setIndentation = do
 parseYAML :: Bool -> IParser YAMLValue
 parseYAML setIndentation = do
   many (try (parseWS <* parseEnd))
-  try (parseList setIndentation) <|>
-    try (parseMap setIndentation) <|>
-    try parseDouble <|>
-    try parseString <|>
-    try parseEmpty
+  try (parseList setIndentation)
+    <|> try (parseMap setIndentation)
+    <|> try parseDouble
+    <|> try parseString
+    <|> try parseEmpty
 
 -- Parses the given YAML file.
 parseYAMLFile :: FilePath -> IO (Either ParseError YAMLValue)
 parseYAMLFile filename = do
   handle <- IO.openFile filename IO.ReadMode
   str <- IO.hGetContents handle
-  if null str then return (Right YAMLNull) 
+  if null str
+    then return (Right YAMLNull)
     else pure $ runParser (parseYAML True <* eof) 0 "" str
+
+--- Extractors ---
+
+extractString :: YAMLValue -> Maybe String
+extractString (YAMLString s) = Just s
+extractString _ = Nothing
+
+extractDouble :: YAMLValue -> Maybe Double
+extractDouble (YAMLDouble d) = Just d
+extractDouble _ = Nothing
+
+extractList :: YAMLValue -> Maybe [YAMLValue]
+extractList (YAMLList l) = Just l
+extractList _ = Nothing
+
+extractMap :: YAMLValue -> Maybe (Map String YAMLValue)
+extractMap (YAMLMap m) = Just m
+extractMap _ = Nothing
