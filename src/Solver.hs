@@ -100,46 +100,79 @@ getKCLEquations circuit topology =
 -- Generate Ohm's law equations for resistors with unknown current/resistance
 getOhmEquations :: Circuit -> [Equation]
 getOhmEquations circuit =
-  [ makeOhmEquation comp nodeVoltageDiff
+  [ equation
     | comp <- Map.elems (components circuit),
-      -- Only consider resistors
-      case componentType comp of
-        Resistor _ -> True
-        _ -> False,
-      -- Get the nodes
-      let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
-          negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
-          nodeVoltageDiff = calculateNodeVoltageDiff posNode negNode
+      equation <- Maybe.maybeToList (getOhmEquation circuit comp)
   ]
-  where
-    makeOhmEquation comp voltageDiff = case componentType comp of
-      Resistor (Known r) -> case current comp of
-        Unknown u ->
-          -- V = IR becomes IR = V
-          Equation
-            (Product [Constant r, UnknownTerm u])
-            (Constant $ getConstant' voltageDiff)
-        _ -> error "Expected unknown current"
-      Resistor (Unknown u) -> case current comp of
-        Known i ->
-          -- V = IR becomes R = V/I
-          Equation
-            (UnknownTerm u)
-            (Constant $ getConstant' voltageDiff / i)
-        _ -> error "Expected known current"
-      _ -> error "Expected resistor"
 
--- Modify getEquations to include Ohm's law
+-- Generate Ohm's law equation for a single component
+getOhmEquation :: Circuit -> Component -> Maybe Equation
+getOhmEquation circuit comp = case componentType comp of
+  Resistor r -> case (r, current comp) of
+    -- Case 1: Known resistance, unknown current
+    (Known resistance, Unknown (Parameter curr)) ->
+      Just $ makeOhmEquation circuit comp resistance curr
+    -- Case 2: Unknown resistance, known current
+    (Unknown (Parameter resistance), Known curr) ->
+      Just $ makeResistanceEquation circuit comp resistance curr
+    _ -> Nothing
+  _ -> Nothing
+
+-- Make equation for V = IR (when solving for I)
+makeOhmEquation :: Circuit -> Component -> Double -> ComponentID -> Equation
+makeOhmEquation circuit comp resistance curr =
+  let voltageDiff = getNodeVoltageDiff circuit comp
+   in case getMaybeConstant voltageDiff of
+        Just v ->
+          Equation
+            { lhs = Product [Constant (-resistance), UnknownTerm (Parameter curr)],
+              rhs = Constant (-v)
+            }
+        Nothing ->
+          Equation
+            { lhs =
+                Sum
+                  [ voltageDiff,
+                    Product [Constant (-resistance), UnknownTerm (Parameter curr)]
+                  ],
+              rhs = Constant 0.0
+            }
+
+-- Make equation for R = V/I (when solving for R)
+makeResistanceEquation :: Circuit -> Component -> ComponentID -> Double -> Equation
+makeResistanceEquation circuit comp resistance curr =
+  Equation
+    { lhs =
+        Sum
+          [ UnknownTerm (Parameter resistance),
+            Product [Constant (-(1 / curr)), getNodeVoltageDiff circuit comp]
+          ],
+      rhs = Constant 0.0
+    }
+
+-- Calculate voltage difference between positive and negative nodes
+getNodeVoltageDiff :: Circuit -> Component -> Term
+getNodeVoltageDiff circuit comp =
+  let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
+      negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
+   in Sum
+        [ case nodeVoltage posNode of
+            Known val -> Constant val
+            Unknown u -> UnknownTerm u,
+          Product
+            [ Constant (-1),
+              case nodeVoltage negNode of
+                Known val -> Constant val
+                Unknown u -> UnknownTerm u
+            ]
+        ]
+
 getEquations :: Circuit -> [Equation]
 getEquations circuit =
   let topology = buildTopology circuit
-      -- Get KVL equations from loops
       kvlEquations = getKVLEquations circuit topology
-      -- Get KCL equations from nodes
       kclEquations = getKCLEquations circuit topology
-      -- Get component equations (voltage sources, etc)
       componentEquations = getComponentEquations circuit
-      -- Get Ohm's law equations
       ohmEquations = getOhmEquations circuit
    in kvlEquations ++ kclEquations ++ componentEquations ++ ohmEquations
 
@@ -177,6 +210,7 @@ equationToRow indices size (Equation lhs _) =
   let coeffPairs = termToCoefficients indices lhs
    in [if i `elem` map fst coeffPairs then Maybe.fromMaybe 0 (lookup i coeffPairs) else 0 | i <- [0 .. size - 1]]
 
+-- gathers unknowns and creates a matrix of coefficients and a vector of constants
 equationsToMatrix :: [Equation] -> (LA.Matrix Double, LA.Vector Double)
 equationsToMatrix equations =
   let unknownIndices = getUnknownsWithIndices equations
@@ -196,6 +230,8 @@ solve circuit =
       unknowns = getUnknowns equations
    in Map.fromList $ zip (Set.toList unknowns) (LA.toList (LA.flatten solution))
 
+-- helper function to get the voltage term for a component
+-- isForward is true if the current is exiting the positive terminal of the component
 componentVoltage :: Circuit -> Bool -> Component -> Term
 componentVoltage circuit isForward comp =
   case componentType comp of
@@ -216,6 +252,8 @@ componentVoltage circuit isForward comp =
           _ -> Constant 0.0
       Unknown u -> UnknownTerm u
 
+-- helper function to get the current term for a component
+-- isForward is true if the current is exiting the positive terminal of the component
 componentCurrent :: Bool -> Component -> Term
 componentCurrent isForward comp = case current comp of
   Known val ->
@@ -251,6 +289,7 @@ getConstant (Equation _ rhs) = getConstant' rhs
 isConstant :: Term -> Bool
 isConstant (Constant _) = True
 isConstant (Product ts) = all isConstant ts
+isConstant (Sum ts) = all isConstant ts
 isConstant _ = False
 
 -- Helper to evaluate constant terms
@@ -259,6 +298,13 @@ getConstant' (Constant c) = c
 getConstant' (Sum terms) = sum (map getConstant' terms)
 getConstant' (Product terms) = product (map getConstant' terms)
 getConstant' (UnknownTerm _) = 0
+
+-- helper function to get the constant term from a term (if the term is fully composed of constants)
+getMaybeConstant :: Term -> Maybe Double
+getMaybeConstant (Constant c) = Just c
+getMaybeConstant (Sum terms) = mapM getMaybeConstant terms >>= (Just . sum)
+getMaybeConstant (Product terms) = mapM getMaybeConstant terms >>= (Just . product)
+getMaybeConstant _ = Nothing
 
 termToCoefficients :: Map.Map Unknown Int -> Term -> [(Int, Double)]
 termToCoefficients indices term = case term of
@@ -279,11 +325,8 @@ termToCoefficients indices term = case term of
 
 calculateNodeVoltageDiff :: Node -> Node -> Term
 calculateNodeVoltageDiff posNode negNode =
-  Sum
-    [ nodeVoltageToTerm posNode,
-      Product [Constant (-1), nodeVoltageToTerm negNode]
-    ]
-  where
-    nodeVoltageToTerm node = case nodeVoltage node of
-      Known val -> Constant val
-      Unknown u -> UnknownTerm u
+  case (nodeVoltage posNode, nodeVoltage negNode) of
+    (Known vp, Known vn) -> Constant (vp - vn)
+    (Known vp, Unknown u) -> Sum [Constant vp, Product [Constant (-1), UnknownTerm u]]
+    (Unknown u, Known vn) -> Sum [UnknownTerm u, Constant (-vn)]
+    (Unknown u1, Unknown u2) -> Sum [UnknownTerm u1, Product [Constant (-1), UnknownTerm u2]]

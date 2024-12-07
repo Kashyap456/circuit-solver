@@ -170,8 +170,9 @@ testKCLEquations = TestCase $ do
 testOhmEquations :: Test
 testOhmEquations = TestCase $ do
   -- Test case 1: Known resistance, unknown current
-  let n1 = Node (NodeID "n1") (Known 5.0)
-      n2 = Node (NodeID "n2") (Known 0.0)
+  -- Circuit setup: 100 ohm resistor between 5V and 0V nodes
+  let n1 = Node (NodeID "n1") (Known 5.0) -- 5V node
+      n2 = Node (NodeID "n2") (Known 0.0) -- Ground (0V) node
       r1 =
         Component
           (ComponentID "r1")
@@ -185,22 +186,22 @@ testOhmEquations = TestCase $ do
           (Map.fromList [(ComponentID "r1", r1)])
 
   let equations1 = getOhmEquations circuit1
-  assertEqual "Should generate one equation" 1 (length equations1)
+  assertEqual "Should generate one equation for known resistance case" 1 (length equations1)
 
   -- For known R=100 Ohm, V1=5V, V2=0V:
-  -- 100*i = 5
+  -- V = IR becomes: -100*i = -5
   case head equations1 of
     Equation lhs rhs -> do
       case lhs of
         Product terms -> do
-          assertEqual "Should have two terms" 2 (length terms)
+          assertEqual "Should have two terms in Product" 2 (length terms)
           let expectedTerms =
-                [ Constant 100.0,
+                [ Constant (-100.0),
                   UnknownTerm (Parameter (ComponentID "i_r1"))
                 ]
-          assertEqual "Ohm's law equation LHS terms (known R)" expectedTerms terms
-          assertEqual "Ohm's law equation RHS (known R)" (Constant 5.0) rhs
-        _ -> assertFailure "LHS should be a Product"
+          assertEqual "Ohm's law equation terms (known R)" expectedTerms terms
+          assertEqual "Ohm's law equation RHS (known R)" (Constant (-5.0)) rhs
+        _ -> assertFailure $ "LHS should be a Product, but got: " ++ show lhs
 
   -- Test case 2: Unknown resistance, known current
   let r2 =
@@ -216,17 +217,31 @@ testOhmEquations = TestCase $ do
           (Map.fromList [(ComponentID "r2", r2)])
 
   let equations2 = getOhmEquations circuit2
-  assertEqual "Should generate one equation" 1 (length equations2)
+  assertEqual "Should generate one equation for unknown resistance case" 1 (length equations2)
 
   -- For known i=0.05A, V1=5V, V2=0V:
-  -- R = 5/0.05 = 100
+  -- V = IR becomes: 5 = R*0.05
+  -- Therefore R = 5/0.05 = 100
   case head equations2 of
     Equation lhs rhs -> do
       case lhs of
-        UnknownTerm u -> do
-          assertEqual "LHS should be unknown resistance" (Parameter (ComponentID "r2")) u
-          assertEqual "RHS should be V/I = 100" (Constant 100.0) rhs
-        _ -> assertFailure "LHS should be an UnknownTerm"
+        Sum terms -> do
+          assertEqual "Should have two terms in Sum" 2 (length terms)
+
+          -- Find the constant term
+          let constantTerms = filter isConstant terms
+          assertApproxEqual "Constant term should be -100.0" (-100.0) (getConstant' (head constantTerms))
+
+          -- Check the unknown term
+          let unknownTerms = filter (not . isConstant) terms
+          assertEqual "Should have one unknown term" 1 (length unknownTerms)
+          assertEqual
+            "Unknown term should be r2"
+            (UnknownTerm (Parameter (ComponentID "r2")))
+            (head unknownTerms)
+
+          assertEqual "Ohm's law equation RHS (unknown R)" (Constant 0.0) rhs
+        _ -> assertFailure $ "LHS should be a Sum, but got: " ++ show lhs
 
 -- all unknowns should be on LHS, constants on RHS
 testComponentEquations :: Test

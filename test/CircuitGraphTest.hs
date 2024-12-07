@@ -8,7 +8,6 @@ import CircuitGraph
     findLoopPathsFromNode,
     makeLoopCircuit,
     nextMoves,
-    pathToCircuit,
   )
 import Control.Monad (forM_)
 import Data.Map qualified as Map

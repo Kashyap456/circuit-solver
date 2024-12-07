@@ -2,7 +2,6 @@ module CircuitGraph
   ( CircuitTopology (..),
     SearchState (..),
     buildTopology,
-    pathToCircuit,
     makeLoopCircuit,
     nextMoves,
     findLoopPathsFromNode,
@@ -25,6 +24,8 @@ import Data.Maybe (maybeToList)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Path (Path (..), PathContent (..), PathRest (..), addPair, emptyPath, isLoop, pathComponents, pathNodes, startPath)
+
+-- TODO: use the state Monad instead of explicitly passing the search state around
 
 -- Precomputed adjacency information
 newtype CircuitTopology = CircuitTopology
@@ -94,12 +95,6 @@ nextMoves (CircuitTopology adjMap) (SearchState path used) =
           ]
     _ -> [] -- Empty path or invalid state
 
--- Convert a valid path to a circuit
-pathToCircuit :: Circuit -> Path -> Maybe Circuit
-pathToCircuit circuit path
-  | isLoop path = Just $ makeLoopCircuit circuit path
-  | otherwise = Nothing
-
 -- Construct a circuit from a path
 makeLoopCircuit :: Circuit -> Path -> Circuit
 makeLoopCircuit circuit path =
@@ -117,11 +112,3 @@ connectsNodes' :: NodeID -> NodeID -> Component -> Bool
 connectsNodes' n1 n2 comp =
   (nodePos comp == n1 && nodeNeg comp == n2)
     || (nodePos comp == n2 && nodeNeg comp == n1)
-
--- Find component connecting two nodes
-getConnectingComponent :: Circuit -> (NodeID, NodeID) -> [(ComponentID, Component)]
-getConnectingComponent circuit (n1, n2) =
-  [ (componentID comp, comp)
-    | comp <- Map.elems (components circuit),
-      connectsNodes' n1 n2 comp
-  ]
