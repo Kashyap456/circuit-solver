@@ -3,7 +3,6 @@ module CircuitGraph
     SearchState (..),
     buildTopology,
     findLoopsFromNode,
-    isValidNextNode,
     pathToCircuit,
     makeLoopCircuit,
     nextMoves,
@@ -19,13 +18,12 @@ import Circuit
   )
 import Control.Arrow ((>>>))
 import Data.Function ((&))
+import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Maybe (maybeToList)
 import Data.Set (Set)
 import Data.Set qualified as Set
-
--- TODO: Add deduplication logic for loops
--- TODO: treat paths as backward to avoid concat operations
+import Path (Path (..), PathContent (..), PathRest (..), addPair, emptyPath, isLoop, pathComponents, pathNodes, startPath)
 
 -- Precomputed adjacency information
 newtype CircuitTopology = CircuitTopology
@@ -34,8 +32,7 @@ newtype CircuitTopology = CircuitTopology
 -- Build the topology once, use it many times
 buildTopology :: Circuit -> CircuitTopology
 buildTopology circuit =
-  let -- Build adjacency map
-      adjList = Map.foldr (addComponentEdges (components circuit)) Map.empty (components circuit)
+  let adjList = Map.foldr (addComponentEdges (components circuit)) Map.empty (components circuit)
    in CircuitTopology {adjacencyMap = adjList}
   where
     addComponentEdges ::
@@ -47,72 +44,73 @@ buildTopology circuit =
       let cid = componentID comp
           pos = nodePos comp
           neg = nodeNeg comp
-          -- Add bidirectional edges
           addEdge n1 n2 = Map.insertWith (++) n1 [(n2, cid)]
        in addEdge pos neg . addEdge neg pos
 
--- Optimized search state
+-- Optimized search state using Path
 data SearchState = SearchState
-  { currentNode :: NodeID,
-    usedComponents :: Set ComponentID,
-    pathNodes :: [NodeID] -- Store just nodes, components can be looked up later
+  { currentPath :: Path,
+    usedComponents :: Set ComponentID
   }
+  deriving (Show)
 
 -- Find all loops starting from a node using precomputed topology
 findLoopsFromNode :: Circuit -> CircuitTopology -> NodeID -> [Circuit]
 findLoopsFromNode circuit topo startNode =
-  findLoopsFromState circuit topo initialState
+  let allLoops = findLoopsFromState circuit topo initialState
+      -- Create pairs of (sorted component IDs, circuit) for deduplication
+      loopsWithKeys = [(Set.fromList $ Map.keys $ components c, c) | c <- allLoops]
+      -- Use Map to keep only unique component combinations
+      uniqueLoops = Map.elems $ Map.fromList loopsWithKeys
+   in uniqueLoops
   where
     initialState =
       SearchState
-        { currentNode = startNode,
-          usedComponents = Set.empty,
-          pathNodes = []
+        { currentPath = startPath startNode,
+          usedComponents = Set.empty
         }
 
 -- Core loop finding using precomputed adjacency
 findLoopsFromState :: Circuit -> CircuitTopology -> SearchState -> [Circuit]
-findLoopsFromState circuit topo state@(SearchState current used path) =
-  let completePath = path ++ [current]
-   in maybeToList (pathToCircuit circuit completePath)
-        ++ (nextMoves topo state >>= findLoopsFromState circuit topo)
+findLoopsFromState circuit topo state =
+  maybeToList
+    ( if isLoop (currentPath state)
+        then pathToCircuit circuit (currentPath state)
+        else Nothing
+    )
+    ++ (nextMoves topo state >>= findLoopsFromState circuit topo)
 
 -- Get next possible moves using precomputed adjacency
 nextMoves :: CircuitTopology -> SearchState -> [SearchState]
-nextMoves topo (SearchState current used path) =
-  [ SearchState nextNode (Set.insert compId used) (path ++ [current])
-    | (nextNode, compId) <- Map.findWithDefault [] current (adjacencyMap topo),
-      not (Set.member compId used),
-      isValidNextNode nextNode (path ++ [current])
-  ]
+nextMoves (CircuitTopology adjMap) (SearchState path used) =
+  case path of
+    Path start (ConsNode currentNode _) ->
+      -- Get all adjacent nodes and their connecting components
+      case Map.lookup currentNode adjMap of
+        Nothing -> []
+        Just adjacentNodes ->
+          -- Filter out used components and create new states
+          [ SearchState newPath (Set.insert componentId used)
+            | (nextNode, componentId) <- adjacentNodes,
+              not (Set.member componentId used),
+              Just newPath <- [addPair nextNode componentId path]
+          ]
+    _ -> [] -- Empty path or invalid state
 
--- Check if a node can be added to the path
-isValidNextNode :: NodeID -> [NodeID] -> Bool
-isValidNextNode node path = case path of
-  [] -> True -- Empty path - any node valid
-  [n] -> node /= n -- Single node - can't revisit
-  (start : rest) ->
-    node `notElem` rest -- Can't revisit intermediate nodes
-      && (node /= start || not (null rest)) -- Can return to start if path long enough
+-- Convert a valid path to a circuit
+pathToCircuit :: Circuit -> Path -> Maybe Circuit
+pathToCircuit circuit path
+  | isLoop path = Just $ makeLoopCircuit circuit path
+  | otherwise = Nothing
 
--- Convert a valid path to a circuit using precomputed maps
-pathToCircuit :: Circuit -> [NodeID] -> Maybe Circuit
-pathToCircuit circuit path = case path of
-  [] -> Nothing
-  [_] -> Nothing
-  nodes@(first : rest)
-    | last nodes == first && not (null rest) -> Just $ makeLoopCircuit circuit nodes
-    | otherwise -> Nothing
-
--- Construct a circuit from a path using precomputed maps
-makeLoopCircuit :: Circuit -> [NodeID] -> Circuit
-makeLoopCircuit circuit nodePath =
-  let nodeSet = Set.fromList nodePath
+-- Construct a circuit from a path
+makeLoopCircuit :: Circuit -> Path -> Circuit
+makeLoopCircuit circuit path =
+  let nodeList = pathNodes path
+      nodeSet = Set.fromList nodeList
       loopNodes = Map.restrictKeys (nodes circuit) nodeSet
-      loopComponents =
-        zip nodePath (tail nodePath)
-          & concatMap (getConnectingComponent circuit)
-          & Map.fromList
+      componentList = pathComponents path
+      loopComponents = Map.restrictKeys (components circuit) (Set.fromList componentList)
    in Circuit
         { nodes = loopNodes,
           components = loopComponents
@@ -123,7 +121,7 @@ connectsNodes' n1 n2 comp =
   (nodePos comp == n1 && nodeNeg comp == n2)
     || (nodePos comp == n2 && nodeNeg comp == n1)
 
--- Find component connecting two nodes using precomputed adjacency
+-- Find component connecting two nodes
 getConnectingComponent :: Circuit -> (NodeID, NodeID) -> [(ComponentID, Component)]
 getConnectingComponent circuit (n1, n2) =
   [ (componentID comp, comp)
