@@ -97,40 +97,37 @@ getKCLEquations circuit topology =
   let equationNodes = Map.elems (nodes circuit)
    in map (nodeToKCLEquation circuit) equationNodes
 
+-- Generate Ohm's law equations for resistors with unknown current/resistance
 getOhmEquations :: Circuit -> [Equation]
 getOhmEquations circuit =
-  [ Equation
-      { lhs =
-          Sum
-            [ nodeVoltageDiff,
-              Product [Constant (-resistance), UnknownTerm (Parameter curr)]
-            ],
-        rhs = Constant 0.0
-      }
+  [ makeOhmEquation comp nodeVoltageDiff
     | comp <- Map.elems (components circuit),
-      let maybeValues = case componentType comp of
-            Resistor (Known r) ->
-              case current comp of
-                Unknown (Parameter c) ->
-                  let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
-                      negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
-                      nodeVoltageDiff =
-                        Sum
-                          [ case nodeVoltage posNode of
-                              Known val -> Constant val
-                              Unknown u -> UnknownTerm u,
-                            Product
-                              [ Constant (-1),
-                                case nodeVoltage negNode of
-                                  Known val -> Constant val
-                                  Unknown u -> UnknownTerm u
-                              ]
-                          ]
-                   in Just (r, c, nodeVoltageDiff)
-                _ -> Nothing
-            _ -> Nothing,
-      Just (resistance, curr, nodeVoltageDiff) <- [maybeValues]
+      -- Only consider resistors
+      case componentType comp of
+        Resistor _ -> True
+        _ -> False,
+      -- Get the nodes
+      let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
+          negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
+          nodeVoltageDiff = calculateNodeVoltageDiff posNode negNode
   ]
+  where
+    makeOhmEquation comp voltageDiff = case componentType comp of
+      Resistor (Known r) -> case current comp of
+        Unknown u ->
+          -- V = IR becomes IR = V
+          Equation
+            (Product [Constant r, UnknownTerm u])
+            (Constant $ getConstant' voltageDiff)
+        _ -> error "Expected unknown current"
+      Resistor (Unknown u) -> case current comp of
+        Known i ->
+          -- V = IR becomes R = V/I
+          Equation
+            (UnknownTerm u)
+            (Constant $ getConstant' voltageDiff / i)
+        _ -> error "Expected known current"
+      _ -> error "Expected resistor"
 
 -- Modify getEquations to include Ohm's law
 getEquations :: Circuit -> [Equation]
@@ -279,3 +276,14 @@ termToCoefficients indices term = case term of
     [(indices Map.! u, 1.0)]
   Constant _ ->
     []
+
+calculateNodeVoltageDiff :: Node -> Node -> Term
+calculateNodeVoltageDiff posNode negNode =
+  Sum
+    [ nodeVoltageToTerm posNode,
+      Product [Constant (-1), nodeVoltageToTerm negNode]
+    ]
+  where
+    nodeVoltageToTerm node = case nodeVoltage node of
+      Known val -> Constant val
+      Unknown u -> UnknownTerm u

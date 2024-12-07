@@ -57,7 +57,7 @@ simpleTestCircuit =
   let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
       n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2")))
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n2") (NodeID "n1")
+      v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
    in Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1)])
 
 testCircuitTopology :: Test
@@ -124,13 +124,12 @@ testKVLEquations = TestCase $ do
   -- (resistor voltage drop + voltage source = 0 around loop)
   let equation = head kvlEquations
   case equation of
-    Equation (Sum terms) (Constant 0.0) -> do
-      assertEqual "Number of terms in KVL equation" 2 (length terms)
+    Equation (Sum terms) rhs -> do
+      assertEqual "Number of terms in KVL LHS" 1 (length terms)
+      assertApproxEqual "RHS of KVL equation" (-5.0) (getConstant' rhs)
       -- Check the terms are as expected
       let expectedTerms =
-            [ Product [Constant 100.0, UnknownTerm (Parameter (ComponentID "i_r1"))],
-              Constant 5.0
-            ]
+            [Product [Constant (-100.0), UnknownTerm (Parameter (ComponentID "i_r1"))]]
       assertEqual "KVL equation terms" expectedTerms terms
     _ -> assertFailure "Unexpected equation format"
 
@@ -143,15 +142,15 @@ testKCLEquations = TestCase $ do
   -- Should have 2 equations, one for each node
   assertEqual "Number of KCL equations" 2 (length kclEquations)
 
-  -- For node n1: i_r1 - i_v1 = 0
-  -- For node n2: -i_r1 + i_v1 = 0
+  -- For node n1: -i_r1 + i_v1 = 0
+  -- For node n2: i_r1 - i_v1 = 0
   let expectedTerms1 =
-        [ UnknownTerm (Parameter (ComponentID "i_r1")),
-          Product [Constant (-1), UnknownTerm (Parameter (ComponentID "i_v1"))]
-        ]
-      expectedTerms2 =
         [ Product [Constant (-1), UnknownTerm (Parameter (ComponentID "i_r1"))],
           UnknownTerm (Parameter (ComponentID "i_v1"))
+        ]
+      expectedTerms2 =
+        [ UnknownTerm (Parameter (ComponentID "i_r1")),
+          Product [Constant (-1), UnknownTerm (Parameter (ComponentID "i_v1"))]
         ]
 
   -- Check first equation
@@ -167,6 +166,67 @@ testKCLEquations = TestCase $ do
       assertEqual "Number of terms in second KCL equation" 2 (length terms)
       assertEqual "Second KCL equation terms" expectedTerms2 terms
     _ -> assertFailure "Unexpected second equation format"
+
+testOhmEquations :: Test
+testOhmEquations = TestCase $ do
+  -- Test case 1: Known resistance, unknown current
+  let n1 = Node (NodeID "n1") (Known 5.0)
+      n2 = Node (NodeID "n2") (Known 0.0)
+      r1 =
+        Component
+          (ComponentID "r1")
+          (Resistor (Known 100.0)) -- Known 100 ohm resistance
+          (Unknown (Parameter (ComponentID "i_r1"))) -- Unknown current
+          (NodeID "n1")
+          (NodeID "n2")
+      circuit1 =
+        Circuit
+          (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)])
+          (Map.fromList [(ComponentID "r1", r1)])
+
+  let equations1 = getOhmEquations circuit1
+  assertEqual "Should generate one equation" 1 (length equations1)
+
+  -- For known R=100 Ohm, V1=5V, V2=0V:
+  -- 100*i = 5
+  case head equations1 of
+    Equation lhs rhs -> do
+      case lhs of
+        Product terms -> do
+          assertEqual "Should have two terms" 2 (length terms)
+          let expectedTerms =
+                [ Constant 100.0,
+                  UnknownTerm (Parameter (ComponentID "i_r1"))
+                ]
+          assertEqual "Ohm's law equation LHS terms (known R)" expectedTerms terms
+          assertEqual "Ohm's law equation RHS (known R)" (Constant 5.0) rhs
+        _ -> assertFailure "LHS should be a Product"
+
+  -- Test case 2: Unknown resistance, known current
+  let r2 =
+        Component
+          (ComponentID "r2")
+          (Resistor (Unknown (Parameter (ComponentID "r2")))) -- Unknown resistance
+          (Known 0.05) -- Known 50mA current
+          (NodeID "n1")
+          (NodeID "n2")
+      circuit2 =
+        Circuit
+          (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)])
+          (Map.fromList [(ComponentID "r2", r2)])
+
+  let equations2 = getOhmEquations circuit2
+  assertEqual "Should generate one equation" 1 (length equations2)
+
+  -- For known i=0.05A, V1=5V, V2=0V:
+  -- R = 5/0.05 = 100
+  case head equations2 of
+    Equation lhs rhs -> do
+      case lhs of
+        UnknownTerm u -> do
+          assertEqual "LHS should be unknown resistance" (Parameter (ComponentID "r2")) u
+          assertEqual "RHS should be V/I = 100" (Constant 100.0) rhs
+        _ -> assertFailure "LHS should be an UnknownTerm"
 
 -- all unknowns should be on LHS, constants on RHS
 testComponentEquations :: Test
@@ -215,7 +275,7 @@ testComponentEquations = TestCase $ do
       _ -> False
 
 runEquationTests :: IO Counts
-runEquationTests = runTestTT $ TestList [testKVLEquations, testKCLEquations, testComponentEquations]
+runEquationTests = runTestTT $ TestList [testKVLEquations, testKCLEquations, testOhmEquations, testComponentEquations]
 
 -- GENERAL TESTING
 
