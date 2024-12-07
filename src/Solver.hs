@@ -1,6 +1,6 @@
 module Solver where
 
-import Circuit (Circuit (..), Component (..), ComponentID, ComponentType (..), Node (..), NodeID, Unknown, Var (..), componentType)
+import Circuit (Circuit (..), Component (..), ComponentID, ComponentType (..), Node (..), NodeID, Unknown (..), Var (..), componentType)
 import CircuitGraph (CircuitTopology, buildTopology, findLoopsFromNode)
 import Data.List qualified as List
 import Data.Map qualified as Map
@@ -49,10 +49,8 @@ simplify = undefined
 
 loopToKVLEquation :: Circuit -> Circuit -> Equation
 loopToKVLEquation circuit loopCircuit =
-  let terms = [componentVoltage True comp | comp <- Map.elems (components loopCircuit)]
-      -- Split terms into constants and variables
-      (constants, variables) = List.partition isConstantTerm terms
-      -- Sum up all constants and negate for RHS
+  let terms = [componentVoltage circuit True comp | comp <- Map.elems (components loopCircuit)]
+      (constants, variables) = List.partition isConstant terms
       constantSum = case constants of
         [] -> Constant 0.0
         cs -> Product [Constant (-1.0), Sum cs]
@@ -88,11 +86,54 @@ getKCLEquations circuit topology =
   let equationNodes = Map.elems (nodes circuit)
    in map (nodeToKCLEquation circuit) equationNodes
 
--- Traverses the circuit and generates KVL and KCL equations
+getOhmEquations :: Circuit -> [Equation]
+getOhmEquations circuit =
+  [ Equation
+      { lhs =
+          Sum
+            [ nodeVoltageDiff,
+              Product [Constant (-resistance), UnknownTerm (Parameter curr)]
+            ],
+        rhs = Constant 0.0
+      }
+    | comp <- Map.elems (components circuit),
+      let maybeValues = case componentType comp of
+            Resistor (Known r) ->
+              case current comp of
+                Unknown (Parameter c) ->
+                  let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
+                      negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
+                      nodeVoltageDiff =
+                        Sum
+                          [ case nodeVoltage posNode of
+                              Known val -> Constant val
+                              Unknown u -> UnknownTerm u,
+                            Product
+                              [ Constant (-1),
+                                case nodeVoltage negNode of
+                                  Known val -> Constant val
+                                  Unknown u -> UnknownTerm u
+                              ]
+                          ]
+                   in Just (r, c, nodeVoltageDiff)
+                _ -> Nothing
+            _ -> Nothing,
+      Just (resistance, curr, nodeVoltageDiff) <- [maybeValues]
+  ]
+
+-- Modify getEquations to include Ohm's law
 getEquations :: Circuit -> [Equation]
 getEquations circuit =
   let topology = buildTopology circuit
-   in getKVLEquations circuit topology ++ getKCLEquations circuit topology
+   in getKVLEquations circuit topology
+        ++ getKCLEquations circuit topology
+        ++ getOhmEquations circuit
+
+-- Add this as a top-level function
+equationToRow :: Map.Map Unknown Int -> Int -> Equation -> [Double]
+equationToRow indices size (Equation lhs _) =
+  let coeffPairs = termToCoefficients indices lhs
+   in [if i `elem` map fst coeffPairs then Maybe.fromMaybe 0 (lookup i coeffPairs) else 0 | i <- [0 .. size - 1]]
 
 equationsToMatrix :: [Equation] -> (LA.Matrix Double, LA.Vector Double)
 equationsToMatrix equations =
@@ -100,43 +141,10 @@ equationsToMatrix equations =
       numUnknowns = Map.size unknownIndices
       numEquations = length equations
       -- Create matrix of coefficients and vector of constants
-      matrix = LA.matrix numUnknowns $ concatMap (equationToRow unknownIndices numUnknowns) equations
+      coefficients = concatMap (equationToRow unknownIndices numUnknowns) equations
+      matrix = LA.matrix numUnknowns coefficients
       constants = LA.vector $ map getConstant equations
    in (matrix, constants)
-  where
-    -- Convert equation to a row in the matrix
-    equationToRow :: Map.Map Unknown Int -> Int -> Equation -> [Double]
-    equationToRow indices size (Equation lhs _) =
-      let coeffPairs = termToCoefficients indices lhs
-       in [if i `elem` map fst coeffPairs then Maybe.fromMaybe 0 (lookup i coeffPairs) else 0 | i <- [0 .. size - 1]]
-
-    -- Extract coefficients from terms
-    termToCoefficients :: Map.Map Unknown Int -> Term -> [(Int, Double)]
-    termToCoefficients indices (Sum terms) = concatMap (termToCoefficients indices) terms
-    termToCoefficients indices (Product terms) =
-      case List.partition isConstant terms of
-        (constants, [UnknownTerm u]) -> [(indices Map.! u, product [c | Constant c <- constants])]
-        _ -> []
-    termToCoefficients indices (UnknownTerm u) = [(indices Map.! u, 1.0)]
-    termToCoefficients _ (Constant _) = []
-
-    -- Get the constant term (right hand side) by combining constant terms
-    getConstant :: Equation -> Double
-    getConstant (Equation _ (Constant c)) = c
-    getConstant (Equation _ (Sum terms)) = sum (map getConstant' terms)
-    getConstant (Equation _ (Product terms)) = product (map getConstant' terms)
-    getConstant (Equation _ (UnknownTerm _)) = error "Unknown term in constant position"
-
-    getConstant' :: Term -> Double
-    getConstant' (Constant c) = c
-    getConstant' (Sum terms) = sum (map getConstant' terms)
-    getConstant' (Product terms) = product (map getConstant' terms)
-    getConstant' (UnknownTerm _) = 0
-
-    -- Helper to identify constant terms
-    isConstant :: Term -> Bool
-    isConstant (Constant _) = True
-    isConstant _ = False
 
 solve :: Circuit -> Map.Map Unknown Double
 solve circuit =
@@ -146,16 +154,28 @@ solve circuit =
       unknowns = getUnknowns equations
    in Map.fromList $ zip (Set.toList unknowns) (LA.toList (LA.flatten solution))
 
-componentVoltage :: Bool -> Component -> Term
-componentVoltage isForward comp = case componentType comp of
-  VSource v -> case v of
-    Known val -> if isForward then Constant val else Constant (-val)
-    Unknown u -> if isForward then UnknownTerm u else Product [Constant (-1), UnknownTerm u]
-  Resistor r -> case (r, current comp) of
-    (Known res, Unknown i) -> Product [Constant res, UnknownTerm i]
-    (Unknown r', Known i) -> Product [UnknownTerm r', Constant i]
-    (Unknown r', Unknown i) -> Product [UnknownTerm r', UnknownTerm i]
-    (Known res, Known i) -> Constant (res * i)
+componentVoltage :: Circuit -> Bool -> Component -> Term
+componentVoltage circuit isForward comp =
+  let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
+      negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
+      nodeVoltageDiff =
+        Sum
+          [ case nodeVoltage posNode of
+              Known val -> Constant val
+              Unknown u -> UnknownTerm u,
+            Product
+              [ Constant (-1),
+                case nodeVoltage negNode of
+                  Known val -> Constant val
+                  Unknown u -> UnknownTerm u
+              ]
+          ]
+      voltageSource = case componentType comp of
+        VSource v -> case v of
+          Known val -> if isForward then Constant (-val) else Constant val
+          Unknown u -> if isForward then Product [Constant (-1), UnknownTerm u] else UnknownTerm u
+        Resistor _ -> nodeVoltageDiff
+   in voltageSource
 
 componentCurrent :: Bool -> Component -> Term
 componentCurrent isForward comp = case current comp of
@@ -183,3 +203,37 @@ getUnknownsWithIndices eqns =
   Map.fromList $ zip (Set.toList unknowns) [0 ..]
   where
     unknowns = getUnknowns eqns
+
+-- Get the constant term (right hand side) by combining constant terms
+getConstant :: Equation -> Double
+getConstant (Equation _ rhs) = getConstant' rhs
+
+-- Helper to identify constant terms
+isConstant :: Term -> Bool
+isConstant (Constant _) = True
+isConstant (Product ts) = all isConstant ts
+isConstant _ = False
+
+-- Helper to evaluate constant terms
+getConstant' :: Term -> Double
+getConstant' (Constant c) = c
+getConstant' (Sum terms) = sum (map getConstant' terms)
+getConstant' (Product terms) = product (map getConstant' terms)
+getConstant' (UnknownTerm _) = 0
+
+termToCoefficients :: Map.Map Unknown Int -> Term -> [(Int, Double)]
+termToCoefficients indices term = case term of
+  Sum terms ->
+    -- Combine coefficients for the same unknown
+    Map.toList $ Map.fromListWith (+) $ concatMap (termToCoefficients indices) terms
+  Product terms ->
+    -- For products, multiply the constant terms and combine with the unknown
+    let (constants, unknowns) = List.partition isConstant terms
+        constProduct = product [c | Constant c <- constants]
+     in case unknowns of
+          [UnknownTerm u] -> [(indices Map.! u, constProduct)]
+          _ -> [] -- Products of multiple unknowns not supported
+  UnknownTerm u ->
+    [(indices Map.! u, 1.0)]
+  Constant _ ->
+    []

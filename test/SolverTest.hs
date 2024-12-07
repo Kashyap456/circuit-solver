@@ -1,11 +1,51 @@
 module SolverTest where
 
 import Circuit
-import CircuitGraph (CircuitTopology (..), adjacencyMap, buildTopology)
+import CircuitGraph (CircuitTopology (..), adjacencyMap, buildTopology, findLoopsFromNode)
+import Control.Monad (unless)
+import Data.List (intercalate)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
+import Numeric.LinearAlgebra qualified as LA
 import Solver
 import Test.HUnit
+
+-- HELPER FUNCTIONS
+
+approxEqual :: Double -> Double -> Bool
+approxEqual x y = abs (x - y) < 1e-10
+
+assertApproxEqual :: String -> Double -> Double -> Assertion
+assertApproxEqual msg expected actual =
+  unless (approxEqual expected actual) $
+    assertFailure $
+      msg ++ "\nexpected: " ++ show expected ++ "\n but got: " ++ show actual
+
+-- Helper functions for pretty printing (these should prob be moved to show instances)
+printEquation :: Equation -> String
+printEquation (Equation lhs rhs) =
+  printTerm lhs ++ " = " ++ printTerm rhs
+
+printTerm :: Term -> String
+printTerm (Constant c) = show c
+printTerm (UnknownTerm (NodeVoltage (NodeID n))) = "V_" ++ n
+printTerm (UnknownTerm (Parameter (ComponentID p))) = p
+printTerm (Sum terms) = "(" ++ intercalate " + " (map printTerm terms) ++ ")"
+printTerm (Product terms) = intercalate "*" (map printTerm terms)
+
+printMatrix :: LA.Matrix Double -> LA.Vector Double -> String
+printMatrix m v =
+  "Matrix A:\n" ++ show m ++ "\nVector b:\n" ++ show v
+
+printSolution :: Map.Map Unknown Double -> String
+printSolution sol =
+  "Solution:\n"
+    ++ concatMap
+      ( \(k, v) -> case k of
+          NodeVoltage (NodeID n) -> "V_" ++ n ++ " = " ++ show v ++ "V\n"
+          Parameter (ComponentID p) -> p ++ " = " ++ show v ++ "A\n"
+      )
+      (Map.toList sol)
 
 -- CIRCUIT GRAPH TESTING
 
@@ -114,26 +154,34 @@ simpleCircuitTest = TestCase $ do
   let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
       n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2")))
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n2") (NodeID "n1")
+      v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
       circuit = Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1)])
   let solution = solve circuit
-  assertEqual "Current through components" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
-  assertEqual "Voltage difference" 5.0 (fromJust (Map.lookup (NodeVoltage (NodeID "n1")) solution) - fromJust (Map.lookup (NodeVoltage (NodeID "n2")) solution))
+  assertApproxEqual "Current through components" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
+  assertApproxEqual "Voltage difference" 5.0 (fromJust (Map.lookup (NodeVoltage (NodeID "n1")) solution) - fromJust (Map.lookup (NodeVoltage (NodeID "n2")) solution))
 
--- Two resistors in series with voltage source
+-- Modified test with verbose output
 twoResistorsInSeriesTest :: Test
 twoResistorsInSeriesTest = TestCase $ do
+  -- Create circuit
   let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
       n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2")))
       n3 = Node (NodeID "n3") (Known 0.0)
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
       r2 = Component (ComponentID "r2") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r2"))) (NodeID "n2") (NodeID "n3")
-      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n3") (NodeID "n1")
-      circuit = Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2), (NodeID "n3", n3)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "r2", r2), (ComponentID "v1", v1)])
+      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n3")
+      circuit =
+        Circuit
+          (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2), (NodeID "n3", n3)])
+          (Map.fromList [(ComponentID "r1", r1), (ComponentID "r2", r2), (ComponentID "v1", v1)])
+
+  -- Solve and print solution
   let solution = solve circuit
-  assertEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
-  assertEqual "Node n2 voltage" 5.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n2")) solution)
-  assertEqual "Current through circuit" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
+
+  -- Assertions
+  assertApproxEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
+  assertApproxEqual "Node n2 voltage" 5.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n2")) solution)
+  assertApproxEqual "Current through circuit" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
 
 -- Two resistors in parallel with voltage source
 twoResistorsInParallelTest :: Test
@@ -142,9 +190,11 @@ twoResistorsInParallelTest = TestCase $ do
       n2 = Node (NodeID "n2") (Known 0.0)
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
       r2 = Component (ComponentID "r2") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r2"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n2") (NodeID "n1")
+      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
       circuit = Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "r2", r2), (ComponentID "v1", v1)])
   let solution = solve circuit
+
+  -- Assertions
   assertEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
   assertEqual "Total current" 0.2 (fromJust $ Map.lookup (Parameter (ComponentID "i_v1")) solution)
   assertEqual "Current through r1" 0.1 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
