@@ -1,12 +1,14 @@
 module SolverTest where
 
 import Circuit
-import CircuitGraph (CircuitTopology (..), adjacencyMap, buildTopology, findLoopsFromNode)
-import Control.Monad (unless)
+import CircuitGraph (CircuitTopology (..), adjacencyMap, buildTopology, findLoopPathsFromNode)
+import Control.Monad (forM_, unless)
 import Data.List (intercalate)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
+import Data.Set qualified as Set
 import Numeric.LinearAlgebra qualified as LA
+import Path (addPair, startPath)
 import Solver
 import Test.HUnit
 
@@ -86,6 +88,29 @@ testCircuitTopology = TestCase $ do
 
 -- EQUATION GENERATION TESTING
 
+testLoopToKVLEquation :: Test
+testLoopToKVLEquation = TestCase $ do
+  -- path: n1 -> r2 -> n2 -> v1 -> n1
+  let path = fromJust $ do
+        p1 <- addPair (NodeID "n2") (ComponentID "r2") (startPath (NodeID "n1"))
+        addPair (NodeID "n1") (ComponentID "v1") p1
+
+  -- Get KVL equation for this loop in parallel circuit
+  let equation = loopToKVLEquation simpleParallelCircuit path
+
+  -- The equation should be: 100*i_r2 - 10 = 0
+  -- (resistor voltage drop + voltage source = 0 around loop)
+  case equation of
+    Equation (Sum terms) (Constant 0.0) -> do
+      assertEqual "Number of terms in KVL equation" 2 (length terms)
+      -- Check the terms are as expected
+      let expectedTerms =
+            [ Product [Constant 100.0, UnknownTerm (Parameter (ComponentID "i_r2"))],
+              Constant (-10.0)
+            ]
+      assertEqual "KVL equation terms" expectedTerms terms
+    _ -> assertFailure "Unexpected equation format"
+
 testKVLEquations :: Test
 testKVLEquations = TestCase $ do
   -- Get KVL equations
@@ -143,8 +168,53 @@ testKCLEquations = TestCase $ do
       assertEqual "Second KCL equation terms" expectedTerms2 terms
     _ -> assertFailure "Unexpected second equation format"
 
+testComponentEquations :: Test
+testComponentEquations = TestCase $ do
+  -- Create a circuit with a voltage source and known node voltages
+  let n1 = Node (NodeID "n1") (Known 5.0) -- Known voltage at n1
+      n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2"))) -- Unknown voltage at n2
+      v1 =
+        Component
+          (ComponentID "v1")
+          (VSource (Unknown (Parameter (ComponentID "v_source")))) -- Unknown source voltage
+          (Unknown (Parameter (ComponentID "i_v1")))
+          (NodeID "n1")
+          (NodeID "n2")
+      circuit =
+        Circuit
+          (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)])
+          (Map.fromList [(ComponentID "v1", v1)])
+
+  let equations = getComponentEquations circuit
+  assertEqual "Should generate one equation" 1 (length equations)
+
+  case head equations of
+    Equation lhs rhs -> do
+      -- LHS should contain the unknown terms: v_n2 and -v_source
+      case lhs of
+        Sum terms -> do
+          assertEqual "Should have two unknown terms" 2 (length terms)
+          assertBool "Should contain node voltage term" $
+            any (isUnknownNodeVoltage (NodeID "n2")) terms
+          assertBool "Should contain source voltage term" $
+            any (isUnknownSourceVoltage (ComponentID "v_source")) terms
+        _ -> assertFailure "LHS should be a Sum"
+
+      -- RHS should contain the constant term: -5.0 (from n1)
+      case rhs of
+        Sum [Product [Constant (-1), Constant v], _, _] ->
+          assertApproxEqual "RHS constant should be -5.0" 5.0 v
+        _ -> assertFailure "RHS should contain -5.0"
+  where
+    isUnknownNodeVoltage nid (UnknownTerm (NodeVoltage nid')) = nid == nid'
+    isUnknownNodeVoltage _ _ = False
+
+    isUnknownSourceVoltage cid (Product [Constant (-1), UnknownTerm (Parameter cid')]) =
+      cid == cid'
+    isUnknownSourceVoltage _ _ = False
+
 runEquationTests :: IO Counts
-runEquationTests = runTestTT $ TestList [testKVLEquations, testKCLEquations]
+runEquationTests = runTestTT $ TestList [testKVLEquations, testKCLEquations, testComponentEquations]
 
 -- GENERAL TESTING
 
@@ -152,13 +222,14 @@ runEquationTests = runTestTT $ TestList [testKVLEquations, testKCLEquations]
 simpleCircuitTest :: Test
 simpleCircuitTest = TestCase $ do
   let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
-      n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2")))
+      n2 = Node (NodeID "n2") (Known 0.0)
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
       v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
       circuit = Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1)])
+
   let solution = solve circuit
   assertApproxEqual "Current through components" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
-  assertApproxEqual "Voltage difference" 5.0 (fromJust (Map.lookup (NodeVoltage (NodeID "n1")) solution) - fromJust (Map.lookup (NodeVoltage (NodeID "n2")) solution))
+  assertApproxEqual "Voltage at n1" 5.0 (fromJust (Map.lookup (NodeVoltage (NodeID "n1")) solution))
 
 -- Modified test with verbose output
 twoResistorsInSeriesTest :: Test
@@ -186,33 +257,52 @@ twoResistorsInSeriesTest = TestCase $ do
 -- Two resistors in parallel with voltage source
 twoResistorsInParallelTest :: Test
 twoResistorsInParallelTest = TestCase $ do
-  let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
-      n2 = Node (NodeID "n2") (Known 0.0)
-      r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
-      r2 = Component (ComponentID "r2") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r2"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
-      circuit = Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "r2", r2), (ComponentID "v1", v1)])
+  -- Create circuit
+  let circuit = simpleParallelCircuit
   let solution = solve circuit
 
   -- Assertions
-  assertEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
-  assertEqual "Total current" 0.2 (fromJust $ Map.lookup (Parameter (ComponentID "i_v1")) solution)
-  assertEqual "Current through r1" 0.1 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
+  assertApproxEqual
+    "Node n1 voltage should be 10.0V (same as voltage source)"
+    10.0
+    (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
+
+  assertApproxEqual
+    "Total current through voltage source should be 0.2A (sum of branch currents)"
+    0.2
+    (fromJust $ Map.lookup (Parameter (ComponentID "i_v1")) solution)
+
+  assertApproxEqual
+    "Current through R1 should be 0.1A (V/R = 10V/100Ω)"
+    0.1
+    (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
+
+  assertApproxEqual
+    "Current through R2 should be 0.1A (V/R = 10V/100Ω)"
+    0.1
+    (fromJust $ Map.lookup (Parameter (ComponentID "i_r2")) solution)
 
 -- One resistor with two voltage sources
 twoVoltageSourcesTest :: Test
 twoVoltageSourcesTest = TestCase $ do
+  -- Create circuit
   let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
       n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2")))
       n3 = Node (NodeID "n3") (Known 0.0)
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n3") (NodeID "n1")
-      v2 = Component (ComponentID "v2") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v2"))) (NodeID "n2") (NodeID "n3")
-      circuit = Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2), (NodeID "n3", n3)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1), (ComponentID "v2", v2)])
+      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n3")
+      v2 = Component (ComponentID "v2") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v2"))) (NodeID "n3") (NodeID "n2")
+      circuit =
+        Circuit
+          (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2), (NodeID "n3", n3)])
+          (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1), (ComponentID "v2", v2)])
+
   let solution = solve circuit
-  assertEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
-  assertEqual "Node n2 voltage" 5.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n2")) solution)
-  assertEqual "Current through circuit" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
+
+  -- Assertions
+  assertApproxEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
+  assertApproxEqual "Node n2 voltage" (-5.0) (fromJust $ Map.lookup (NodeVoltage (NodeID "n2")) solution)
+  assertApproxEqual "Current through circuit" 0.15 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
 
 -- Two resistors and two voltage sources in a loop
 twoVoltageSourcesInLoopTest :: Test
@@ -222,18 +312,29 @@ twoVoltageSourcesInLoopTest = TestCase $ do
       n3 = Node (NodeID "n3") (Unknown (NodeVoltage (NodeID "n3")))
       n4 = Node (NodeID "n4") (Known 0.0)
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n2") (NodeID "n3")
+      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n4")
       r2 = Component (ComponentID "r2") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r2"))) (NodeID "n3") (NodeID "n4")
-      v2 = Component (ComponentID "v2") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v2"))) (NodeID "n4") (NodeID "n1")
+      v2 = Component (ComponentID "v2") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v2"))) (NodeID "n3") (NodeID "n2")
       circuit =
         Circuit
           (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2), (NodeID "n3", n3), (NodeID "n4", n4)])
           (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1), (ComponentID "r2", r2), (ComponentID "v2", v2)])
   let solution = solve circuit
-  assertEqual "Node n1 voltage" 5.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
-  assertEqual "Node n2 voltage" 0.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n2")) solution)
-  assertEqual "Node n3 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n3")) solution)
-  assertEqual "Current through circuit" 0.05 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
+  assertApproxEqual "Node n1 voltage" 10.0 (fromJust $ Map.lookup (NodeVoltage (NodeID "n1")) solution)
+  assertApproxEqual "Node n2 voltage" 2.5 (fromJust $ Map.lookup (NodeVoltage (NodeID "n2")) solution)
+  assertApproxEqual "Node n3 voltage" 7.5 (fromJust $ Map.lookup (NodeVoltage (NodeID "n3")) solution)
+  assertApproxEqual "Current through circuit" 0.075 (fromJust $ Map.lookup (Parameter (ComponentID "i_r1")) solution)
 
 tests :: Test
 tests = TestList [simpleCircuitTest, twoResistorsInSeriesTest, twoResistorsInParallelTest, twoVoltageSourcesTest, twoVoltageSourcesInLoopTest]
+
+simpleParallelCircuit :: Circuit
+simpleParallelCircuit =
+  let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
+      n2 = Node (NodeID "n2") (Known 0.0)
+      r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
+      r2 = Component (ComponentID "r2") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r2"))) (NodeID "n1") (NodeID "n2")
+      v1 = Component (ComponentID "v1") (VSource (Known 10.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
+   in Circuit
+        (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)])
+        (Map.fromList [(ComponentID "r1", r1), (ComponentID "r2", r2), (ComponentID "v1", v1)])

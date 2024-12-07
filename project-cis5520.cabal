@@ -46,6 +46,7 @@ library
   exposed-modules:
       Circuit,
       CircuitGraph,
+      Path,
       Solver,
       YamlParser
       -- if you add modules to your project, list them here

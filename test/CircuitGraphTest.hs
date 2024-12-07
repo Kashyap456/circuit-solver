@@ -5,7 +5,7 @@ import CircuitGraph
   ( SearchState (..),
     adjacencyMap,
     buildTopology,
-    findLoopsFromNode,
+    findLoopPathsFromNode,
     makeLoopCircuit,
     nextMoves,
     pathToCircuit,
@@ -99,28 +99,27 @@ testNextMoves = TestCase $ do
 testFindLoops :: Test
 testFindLoops = TestCase $ do
   let topology = buildTopology simpleLoopCircuit
-      loops = findLoopsFromNode simpleLoopCircuit topology (NodeID "n1")
+      paths = findLoopPathsFromNode simpleLoopCircuit topology (NodeID "n1")
 
-  assertEqual "Number of loops found" 1 (length loops)
+  assertEqual "Number of paths found" 1 (length paths)
 
-  let firstLoop = head loops
-  assertEqual "Number of components in loop" 2 (Map.size $ components firstLoop)
-  assertEqual "Number of nodes in loop" 2 (Map.size $ nodes firstLoop)
-
-  assertBool "Loop contains r1" $ Map.member (ComponentID "r1") (components firstLoop)
-  assertBool "Loop contains v1" $ Map.member (ComponentID "v1") (components firstLoop)
+  let firstPath = head paths
+  assertEqual "Number of components in path" 2 (length $ pathComponents firstPath)
+  assertEqual "Number of nodes in path" 3 (length $ pathNodes firstPath) -- Includes start node twice
+  let pathComps = Set.fromList $ pathComponents firstPath
+  assertBool "Path contains r1" $ Set.member (ComponentID "r1") pathComps
+  assertBool "Path contains v1" $ Set.member (ComponentID "v1") pathComps
 
 testFindLoopsParallel :: Test
 testFindLoopsParallel = TestCase $ do
   let topology = buildTopology simpleParallelCircuit
-      loops = findLoopsFromNode simpleParallelCircuit topology (NodeID "n1")
-  assertEqual "Number of parallel loops found" 3 (length loops)
+      paths = findLoopPathsFromNode simpleParallelCircuit topology (NodeID "n1")
+  assertEqual "Number of parallel paths found" 3 (length paths)
 
-  forM_ loops $ \loopCircuit -> do
-    assertEqual "Number of components in loop" 2 (Map.size $ components loopCircuit)
-    assertEqual "Number of nodes in loop" 2 (Map.size $ nodes loopCircuit)
-
-  let foundComponents = Set.fromList [componentID comp | loop <- loops, comp <- Map.elems (components loop)]
+  forM_ paths $ \path -> do
+    assertEqual "Number of components in path" 2 (length $ pathComponents path)
+    assertEqual "Number of nodes in path" 3 (length $ pathNodes path) -- Includes start node twice
+  let foundComponents = Set.fromList $ concatMap pathComponents paths
   assertEqual
     "Found all components"
     (Set.fromList [ComponentID "v1", ComponentID "r1", ComponentID "r2"])

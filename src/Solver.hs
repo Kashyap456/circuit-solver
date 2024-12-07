@@ -1,12 +1,13 @@
 module Solver where
 
 import Circuit (Circuit (..), Component (..), ComponentID, ComponentType (..), Node (..), NodeID, Unknown (..), Var (..), componentType)
-import CircuitGraph (CircuitTopology, buildTopology, findLoopsFromNode)
+import CircuitGraph (CircuitTopology, buildTopology, findLoopPathsFromNode)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Numeric.LinearAlgebra qualified as LA
+import Path (Path, pathComponents, pathNodes)
 
 data Term
   = Constant Double
@@ -22,19 +23,6 @@ data Equation
   }
   deriving (Show, Eq)
 
--- Find all loops in the circuit
-findLoops :: Circuit -> [Circuit]
-findLoops circuit =
-  List.nub $
-    concat
-      [ findLoopsFromNode circuit topology nodeId
-        | nodeId <- Map.keys (nodes circuit)
-      ]
-  where
-    topology = buildTopology circuit
-
-newtype Path = Path [NodeID]
-
 newtype UsedComponents = UsedComponents (Set.Set ComponentID)
 
 data SearchState = SearchState
@@ -47,21 +35,31 @@ data SearchState = SearchState
 simplify :: Circuit -> Circuit
 simplify = undefined
 
-loopToKVLEquation :: Circuit -> Circuit -> Equation
-loopToKVLEquation circuit loopCircuit =
-  let terms = [componentVoltage circuit True comp | comp <- Map.elems (components loopCircuit)]
-      (constants, variables) = List.partition isConstant terms
+loopToKVLEquation :: Circuit -> Path -> Equation
+loopToKVLEquation circuit path =
+  let nodeList = pathNodes path
+      compList = pathComponents path
+      -- Zip components with their directions based on path traversal
+      compDirs = zipWith (\c n2 -> isForwardTraversal c n2) compList (tail nodeList)
+      -- Get the components from the main circuit
+      comps = [Maybe.fromJust $ Map.lookup cid (components circuit) | cid <- compList]
+      -- Create voltage terms with proper directions
+      terms = zipWith (componentVoltage circuit) compDirs comps
+      -- Separate constants and variables
+      (constants, variables) = List.partition isConstantTerm terms
+      -- Sum up all constants
       constantSum = case constants of
         [] -> Constant 0.0
-        cs -> Product [Constant (-1.0), Sum cs]
-   in Equation
-        { lhs = Sum variables,
-          rhs = constantSum
-        }
+        _ -> Sum constants
+   in Equation {lhs = Sum variables, rhs = Product [Constant (-1), constantSum]}
   where
+    isForwardTraversal :: ComponentID -> NodeID -> Bool
+    isForwardTraversal cid nextNode =
+      let comp = Maybe.fromJust $ Map.lookup cid (components circuit)
+       in nodeNeg comp == nextNode
+
     isConstantTerm :: Term -> Bool
     isConstantTerm (Constant _) = True
-    isConstantTerm (Product ts) = all isConstantTerm ts
     isConstantTerm _ = False
 
 nodeToKCLEquation :: Circuit -> Node -> Equation
@@ -69,7 +67,17 @@ nodeToKCLEquation circuit node =
   Equation
     { lhs =
         Sum
-          [ componentCurrent (nodePos comp == nodeID node) comp
+          [ let isPositiveTerminal = nodePos comp == nodeID node
+                currentTerm = componentCurrent True comp
+             in case componentType comp of
+                  VSource _ ->
+                    if isPositiveTerminal
+                      then currentTerm -- Current enters at positive terminal
+                      else Product [Constant (-1), currentTerm]
+                  Resistor _ ->
+                    if isPositiveTerminal
+                      then Product [Constant (-1), currentTerm] -- Current leaves at positive terminal
+                      else currentTerm
             | comp <- Map.elems (components circuit),
               nodePos comp == nodeID node || nodeNeg comp == nodeID node
           ],
@@ -78,8 +86,11 @@ nodeToKCLEquation circuit node =
 
 getKVLEquations :: Circuit -> CircuitTopology -> [Equation]
 getKVLEquations circuit topology =
-  let loops = findLoops circuit
-   in map (loopToKVLEquation circuit) loops
+  let paths =
+        List.nubBy
+          (\p1 p2 -> Set.fromList (pathComponents p1) == Set.fromList (pathComponents p2))
+          [p | nodeId <- Map.keys (nodes circuit), p <- findLoopPathsFromNode circuit topology nodeId]
+   in map (loopToKVLEquation circuit) paths
 
 getKCLEquations :: Circuit -> CircuitTopology -> [Equation]
 getKCLEquations circuit topology =
@@ -125,9 +136,41 @@ getOhmEquations circuit =
 getEquations :: Circuit -> [Equation]
 getEquations circuit =
   let topology = buildTopology circuit
-   in getKVLEquations circuit topology
-        ++ getKCLEquations circuit topology
-        ++ getOhmEquations circuit
+      -- Get KVL equations from loops
+      kvlEquations = getKVLEquations circuit topology
+      -- Get KCL equations from nodes
+      kclEquations = getKCLEquations circuit topology
+      -- Get component equations (voltage sources, etc)
+      componentEquations = getComponentEquations circuit
+      -- Get Ohm's law equations
+      ohmEquations = getOhmEquations circuit
+   in kvlEquations ++ kclEquations ++ componentEquations ++ ohmEquations
+
+-- helper function to generate voltage source equations
+-- TODO: needs to handle cases where a constant ends up on the LHS here
+getComponentEquations :: Circuit -> [Equation]
+getComponentEquations circuit =
+  [ Equation
+      ( Sum
+          [ case nodeVoltage $ Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit) of
+              Known v -> Constant v
+              Unknown u -> UnknownTerm u,
+            Product
+              [ Constant (-1),
+                case nodeVoltage $ Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit) of
+                  Known v -> Constant v
+                  Unknown u -> UnknownTerm u
+              ]
+          ]
+      )
+      ( case componentType comp of
+          VSource (Known v) -> Constant v
+          VSource (Unknown u) -> UnknownTerm u
+          _ -> Constant 0
+      )
+    | comp <- Map.elems (components circuit),
+      VSource _ <- [componentType comp]
+  ]
 
 -- Add this as a top-level function
 equationToRow :: Map.Map Unknown Int -> Int -> Equation -> [Double]
@@ -150,32 +193,29 @@ solve :: Circuit -> Map.Map Unknown Double
 solve circuit =
   let equations = getEquations circuit
       (matrix, constants) = equationsToMatrix equations
-      solution = LA.linearSolveSVD matrix (LA.asColumn constants)
+      solution = LA.linearSolveLS matrix (LA.asColumn constants)
       unknowns = getUnknowns equations
    in Map.fromList $ zip (Set.toList unknowns) (LA.toList (LA.flatten solution))
 
 componentVoltage :: Circuit -> Bool -> Component -> Term
 componentVoltage circuit isForward comp =
-  let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit)
-      negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit)
-      nodeVoltageDiff =
-        Sum
-          [ case nodeVoltage posNode of
-              Known val -> Constant val
-              Unknown u -> UnknownTerm u,
-            Product
-              [ Constant (-1),
-                case nodeVoltage negNode of
-                  Known val -> Constant val
-                  Unknown u -> UnknownTerm u
-              ]
-          ]
-      voltageSource = case componentType comp of
-        VSource v -> case v of
-          Known val -> if isForward then Constant (-val) else Constant val
-          Unknown u -> if isForward then Product [Constant (-1), UnknownTerm u] else UnknownTerm u
-        Resistor _ -> nodeVoltageDiff
-   in voltageSource
+  case componentType comp of
+    VSource v -> case v of
+      Known val -> if isForward then Constant val else Constant (-val)
+      Unknown u -> if isForward then UnknownTerm u else Product [Constant (-1), UnknownTerm u]
+    Resistor r -> case r of
+      Known resistance ->
+        case current comp of
+          Known curr ->
+            if isForward
+              then Constant (resistance * curr)
+              else Constant (-(resistance * curr))
+          Unknown (Parameter cid) ->
+            if isForward
+              then Product [Constant resistance, UnknownTerm (Parameter cid)]
+              else Product [Constant (-resistance), UnknownTerm (Parameter cid)]
+          _ -> Constant 0.0
+      Unknown u -> UnknownTerm u
 
 componentCurrent :: Bool -> Component -> Term
 componentCurrent isForward comp = case current comp of

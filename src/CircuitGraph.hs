@@ -2,10 +2,11 @@ module CircuitGraph
   ( CircuitTopology (..),
     SearchState (..),
     buildTopology,
-    findLoopsFromNode,
     pathToCircuit,
     makeLoopCircuit,
     nextMoves,
+    findLoopPathsFromNode,
+    findLoopPathsFromState,
   )
 where
 
@@ -54,12 +55,12 @@ data SearchState = SearchState
   }
   deriving (Show)
 
--- Find all loops starting from a node using precomputed topology
-findLoopsFromNode :: Circuit -> CircuitTopology -> NodeID -> [Circuit]
-findLoopsFromNode circuit topo startNode =
-  let allLoops = findLoopsFromState circuit topo initialState
-      -- Create pairs of (sorted component IDs, circuit) for deduplication
-      loopsWithKeys = [(Set.fromList $ Map.keys $ components c, c) | c <- allLoops]
+-- Find all loop paths starting from a node using precomputed topology
+findLoopPathsFromNode :: Circuit -> CircuitTopology -> NodeID -> [Path]
+findLoopPathsFromNode circuit topo startNode =
+  let allLoops = findLoopPathsFromState topo initialState
+      -- Create pairs of (sorted component IDs, path) for deduplication
+      loopsWithKeys = [(Set.fromList $ pathComponents p, p) | p <- allLoops]
       -- Use Map to keep only unique component combinations
       uniqueLoops = Map.elems $ Map.fromList loopsWithKeys
    in uniqueLoops
@@ -71,14 +72,10 @@ findLoopsFromNode circuit topo startNode =
         }
 
 -- Core loop finding using precomputed adjacency
-findLoopsFromState :: Circuit -> CircuitTopology -> SearchState -> [Circuit]
-findLoopsFromState circuit topo state =
-  maybeToList
-    ( if isLoop (currentPath state)
-        then pathToCircuit circuit (currentPath state)
-        else Nothing
-    )
-    ++ (nextMoves topo state >>= findLoopsFromState circuit topo)
+findLoopPathsFromState :: CircuitTopology -> SearchState -> [Path]
+findLoopPathsFromState topo state =
+  ([currentPath state | isLoop (currentPath state)])
+    ++ (nextMoves topo state >>= findLoopPathsFromState topo)
 
 -- Get next possible moves using precomputed adjacency
 nextMoves :: CircuitTopology -> SearchState -> [SearchState]
