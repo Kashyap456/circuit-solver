@@ -22,6 +22,10 @@ import Data.List qualified as List
 import Data.Text (strip, pack, unpack)
 import Prelude hiding (lookup)
 import YamlParser (parseYAMLFile, YAMLValue (..), extractList, extractMap, extractString)
+import Control.Monad (when)
+import System.FilePath (takeExtension)
+import GHC.IO.IOMode (IOMode(WriteMode))
+import System.IO
 
 newtype NodeID = NodeID String deriving (Show, Eq, Ord)
 
@@ -80,8 +84,51 @@ parseCircuit filename = do
     Right (YAMLMap m) -> return (getCircuit m)
     _ -> return Nothing
 
+-- Convert a variable to a string
+varToString :: Var -> String
+varToString v = case v of 
+    Known d -> show d
+    Unknown (NodeVoltage (NodeID v)) -> v
+    Unknown (Parameter (ComponentID c)) -> c
+
+-- Convert a circuit's nodes to its YAML string
+nodesToString :: Map NodeID Node -> String
+nodesToString nodeMap = "nodes:\n" ++ foldrWithKey f "" nodeMap where
+  f (NodeID key) node acc = 
+      " - id: " ++ key ++ "\n   voltage: " ++ varToString (nodeVoltage node) ++ "\n" ++ acc
+
+componentTypeToString :: ComponentType -> String
+componentTypeToString t = case t of
+  VSource voltage -> "   type: voltage\n   voltage: " ++ varToString voltage ++ "\n"
+  Resistor resistance -> "   type: resistor\n   resistance: " ++ varToString resistance ++ "\n"
+
+-- Convert a circuit's nodes to its YAML string
+componentsToString :: [Component] -> String
+componentsToString components = "components:\n" ++ List.foldr f "" components where
+  f comp acc = 
+    let (ComponentID id) = componentID comp in
+      let (NodeID posID) = nodePos comp in 
+        let (NodeID negID) = nodeNeg comp in
+          " - id: " ++ id ++
+          "\n   circuit: " ++ varToString (current comp) ++
+          "\n   pos: " ++ posID ++
+          "\n   neg: " ++ negID ++
+          "\n" ++ componentTypeToString (componentType comp) ++ acc
+
+-- Convert a circuit to its YAML file
+circuitToString :: Circuit -> String
+circuitToString circuit =
+  let nodeMap = nodes circuit in
+    let comps = components circuit in
+      nodesToString nodeMap ++ componentsToString comps
+
 saveCircuit :: String -> Circuit -> IO ()
-saveCircuit = undefined
+saveCircuit filename circuit = do
+  when (takeExtension filename /= ".yaml") $ ioError (userError "File should be a yaml file")
+  writeFile filename (circuitToString circuit)
+  return ()
+
+--- Circuit Modifiers --- 
 
 -- Helper for getting a Var type from a map
 getVar :: Map String YAMLValue -> String -> Maybe Var
@@ -149,3 +196,9 @@ getCircuit m = do
   nodes <- getNodes m
   components <- getComponents m
   pure (Circuit nodes components)
+
+
+c :: Circuit
+c = Circuit {nodes = fromList [(NodeID "n1",Node {nodeID = NodeID "n1", nodeVoltage = Unknown (Parameter (ComponentID "n1"))}),(NodeID "n2",Node {nodeID = NodeID "n2", nodeVoltage = Unknown (Parameter (ComponentID "n1"))})], components = [Component {componentID = ComponentID "r1", componentType = Resistor {resistance = Known 100.0}, current = Unknown (Parameter (ComponentID "i_r1")), nodePos = NodeID "n1", nodeNeg = NodeID "n2"},Component {componentID = ComponentID "v1", componentType = VSource {voltage = Known 5.0}, current = Unknown (Parameter (ComponentID "i_r1")), nodePos = NodeID "n2", nodeNeg = NodeID "n1"}]}
+
+
