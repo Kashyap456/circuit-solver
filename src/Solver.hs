@@ -147,30 +147,32 @@ getEquations circuit =
    in kvlEquations ++ kclEquations ++ componentEquations ++ ohmEquations
 
 -- helper function to generate voltage source equations
--- TODO: needs to handle cases where a constant ends up on the LHS here
 getComponentEquations :: Circuit -> [Equation]
 getComponentEquations circuit =
-  [ Equation
-      ( Sum
-          [ case nodeVoltage $ Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circuit) of
-              Known v -> Constant v
-              Unknown u -> UnknownTerm u,
-            Product
-              [ Constant (-1),
-                case nodeVoltage $ Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circuit) of
-                  Known v -> Constant v
-                  Unknown u -> UnknownTerm u
-              ]
-          ]
-      )
-      ( case componentType comp of
-          VSource (Known v) -> Constant v
-          VSource (Unknown u) -> UnknownTerm u
-          _ -> Constant 0
-      )
-    | comp <- Map.elems (components circuit),
-      VSource _ <- [componentType comp]
-  ]
+  let componentList = Map.elems (components circuit)
+   in concatMap (componentToEquation circuit) componentList
+  where
+    componentToEquation :: Circuit -> Component -> [Equation]
+    componentToEquation circ comp = case componentType comp of
+      VSource v ->
+        let posNode = Maybe.fromJust $ Map.lookup (nodePos comp) (nodes circ)
+            negNode = Maybe.fromJust $ Map.lookup (nodeNeg comp) (nodes circ)
+            -- Separate known and unknown terms
+            (lhsTerms, rhsConstants) = case (nodeVoltage posNode, nodeVoltage negNode, v) of
+              -- Cases with two or more knowns
+              (Known vp, Known vn, Known vs) -> ([], vp - vn - vs)
+              (Known vp, Known vn, Unknown u) -> ([UnknownTerm u], vp - vn)
+              (Known vp, Unknown u2, Known vs) -> ([UnknownTerm u2], vp - vs)
+              (Unknown u1, Known vn, Known vs) -> ([UnknownTerm u1], vn + vs)
+              -- Cases with one known
+              (Known vp, Unknown u2, Unknown u3) -> ([UnknownTerm u2, UnknownTerm u3], vp)
+              (Unknown u1, Known vn, Unknown u3) -> ([UnknownTerm u1, UnknownTerm u3], -vn)
+              (Unknown u1, Unknown u2, Known vs) -> ([UnknownTerm u1, Product [Constant (-1), UnknownTerm u2]], vs)
+              -- All unknown
+              (Unknown u1, Unknown u2, Unknown u3) ->
+                ([UnknownTerm u1, Product [Constant (-1), UnknownTerm u2], Product [Constant (-1), UnknownTerm u3]], 0)
+         in [Equation (Sum lhsTerms) (Constant rhsConstants)]
+      Resistor _ -> [] -- Resistor equations handled by Ohm's law
 
 -- Add this as a top-level function
 equationToRow :: Map.Map Unknown Int -> Int -> Equation -> [Double]
