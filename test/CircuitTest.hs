@@ -1,8 +1,12 @@
 module CircuitTest where
 
 import Circuit
+import Control.Exception (catch, throwIO)
 import Data.List qualified as List
 import Data.Map qualified as Map
+import System.Directory (removeFile)
+import System.IO.Error (isDoesNotExistError)
+import Test.HUnit (assert)
 import Test.QuickCheck
   ( Arbitrary (arbitrary),
     Gen,
@@ -12,6 +16,7 @@ import Test.QuickCheck
     chooseInt,
     elements,
     frequency,
+    ioProperty,
     listOf1,
     oneof,
     vectorOf,
@@ -161,3 +166,23 @@ prop_validatePreservesStructure c =
         `Map.isSubmapOf` nodes c
         .&&. components c'
         `Map.isSubmapOf` components c
+
+-- Helper function to remove files from tests
+removeIfExists :: FilePath -> IO ()
+removeIfExists fileName = removeFile fileName `catch` handleExists
+  where
+    handleExists e
+      | isDoesNotExistError e = return ()
+      | otherwise = throwIO e
+
+-- Saving a circuit and parsing the saved file should give the same circuit
+prop_savePreservesCircuit :: Circuit -> Property
+prop_savePreservesCircuit c = ioProperty $ do
+  saveCircuit "test.yaml" c
+  parsed <- parseCircuit "test.yaml"
+  removeIfExists "test.yaml"
+  case parsed of
+    Just c' -> assert (c == c')
+    _ -> assert False
+
+
