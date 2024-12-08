@@ -1,19 +1,21 @@
 module YamlParserTest where
 
 import YamlParser
-import Data.Map (Map)
 import qualified Data.Map as Map
 import Test.HUnit
-import Data.Either (fromRight)
-import Control.Monad.Identity (Identity(runIdentity))
-import Data.Maybe (fromJust)
 
-empty = YAMLMap Map.empty
 
-parseSimple :: Test
-parseSimple = TestCase $ do
+compareYAML :: String -> YAMLValue -> IO ()
+compareYAML filename expected = do
+    result <- parseYAMLFile filename
+    case result of
+        (Left _) -> assert False
+        (Right actual) -> assert (actual == expected)
+
+parseSimpleTest :: Test
+parseSimpleTest =
     let n1 = YAMLMap (Map.fromList [("id", YAMLString "n1"), ("voltage", YAMLString "n1")])
-        n2 = YAMLMap (Map.fromList [("id", YAMLString "n2"), ("voltage", YAMLString "n2")])
+        n2 = YAMLMap (Map.fromList [("id", YAMLString "n2"), ("voltage", YAMLString "n1")])
         r1 = YAMLMap (Map.fromList [
             ("id", YAMLString "r1"),
             ("current", YAMLString "i_r1"),
@@ -27,24 +29,11 @@ parseSimple = TestCase $ do
             ("pos", YAMLString "n2"),
             ("neg", YAMLString "n1"),
             ("type", YAMLString "voltage"),
-            ("resistance", YAMLDouble 5.0)])
+            ("voltage", YAMLDouble 5.0)])
         expected = YAMLMap (Map.fromList [
             ("nodes", YAMLList [n1, n2]),
-            ("components", YAMLList [r1, v1])])
-    let actual = fromRight empty (runIdentity (parseYAMLFile "test/sample_files/simple.yaml"))
-    assertEqual "Parse simple.yaml" expected actual
+            ("components", YAMLList [r1, v1])]) in
+    "Parse Simple" ~: compareYAML "test/sample_files/simple.yaml" expected
 
-parseEmpty :: Test
-parseEmpty = TestCase $ do
-    let actual = fromRight empty (runIdentity (parseYAMLFile "test/sample_files/empty.yaml"))
-    assertEqual "Parse empty.yaml" empty actual
-
-
-{-
-Possible QC Properties (For Later)
-
-1) Saving a circuit and then parsing the saved file should result in the same
-   circuit
-
-2) Roundtrip properties
--}
+parseEmptyTest :: Test
+parseEmptyTest = "Parse Empty" ~: compareYAML "test/sample_files/empty.yaml" YAMLNull
