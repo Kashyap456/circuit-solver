@@ -17,13 +17,21 @@ module Circuit
     componentType,
     current,
     nodeVoltage,
+    parseCircuit,
+    saveCircuit,
+    addNode,
+    deleteNode,
+    addComponent,
+    deleteComponent
   )
 where
 
 import Control.Monad (when)
 import Data.List qualified as List
 import Data.Map
+import Data.Map qualified as Map
 import Data.Text (pack, strip, unpack)
+import Data.Unique
 import GHC.IO.IOMode (IOMode (WriteMode))
 import System.FilePath (takeExtension)
 import System.IO
@@ -77,7 +85,24 @@ data Circuit = Circuit
 -- gets rid of any floating nodes
 -- fails if components use a node that doesn't exist
 validate :: Circuit -> Maybe Circuit
-validate = undefined
+validate c = do
+  let freqMap = componentsToFreqMap c in
+    let n = nodes c in
+      if Map.null (filterWithKey (\id _ -> notMember id n) freqMap) 
+        then Just (Circuit (filterWithKey (\id _ -> member id freqMap) n) (components c)) 
+        else Nothing
+  
+
+-- Returns a frequency map for each node to its number of connected components in the circuit
+componentsToFreqMap :: Circuit -> Map NodeID Int
+componentsToFreqMap c =
+  let compList = elems (components c)
+   in List.foldr f Map.empty compList
+  where
+    f :: Component -> Map NodeID Int -> Map NodeID Int
+    f x acc = do
+      let m = insert (nodePos x) (findWithDefault 0 (nodePos x) acc + 1) acc
+       in insert (nodeNeg x) (findWithDefault 0 (nodeNeg x) m + 1) m
 
 -- Create circuit from a YAML file
 parseCircuit :: String -> IO (Maybe Circuit)
@@ -86,6 +111,46 @@ parseCircuit filename = do
   case parsedYAML of
     Right (YAMLMap m) -> return (getCircuit m)
     _ -> return Nothing
+
+-- Saves a circuit to a YAML file
+saveCircuit :: String -> Circuit -> IO ()
+saveCircuit filename circuit = do
+  when (takeExtension filename /= ".yaml") $ ioError (userError "File should be a yaml file")
+  writeFile filename (circuitToString circuit)
+  return ()
+
+-- ID Generators
+generateID :: (Ord a) => String -> (String -> a) -> Map a b -> IO a
+generateID s fn m = do
+  unique <- newUnique
+  let id = hashUnique unique
+   in let idStr = s ++ show id
+       in if member (fn idStr) m then generateID s fn m else pure $ fn idStr
+
+--- Circuit Modifiers ---
+addNode :: Circuit -> Var -> IO Circuit
+addNode c voltage = do
+  id <- generateID "n" NodeID (nodes c)
+  return (Circuit (insert id (Node id voltage) (nodes c)) (components c))
+
+deleteNode :: Circuit -> NodeID -> Circuit
+deleteNode c id = Circuit (delete id (nodes c)) (components c)
+
+addComponent :: Circuit -> Var -> NodeID -> NodeID -> ComponentType -> IO Circuit
+addComponent c current pos neg t = do
+  id <- getComponentID t (components c)
+  return (Circuit (nodes c) (insert id (Component id t current pos neg) (components c)))
+
+deleteComponent :: Circuit -> ComponentID -> Circuit
+deleteComponent c id = Circuit (nodes c) (delete id (components c))
+
+getComponentID :: ComponentType -> Map ComponentID Component -> IO ComponentID
+getComponentID t m =
+  let prefix = case t of
+        VSource _ -> "v_"
+        Resistor _ -> "i_"
+   in do
+        generateID prefix ComponentID m
 
 -- Convert a variable to a string
 varToString :: Var -> String
@@ -133,15 +198,7 @@ circuitToString circuit =
    in let comps = components circuit
        in nodesToString nodeMap ++ componentsToString comps
 
-saveCircuit :: String -> Circuit -> IO ()
-saveCircuit filename circuit = do
-  when (takeExtension filename /= ".yaml") $ ioError (userError "File should be a yaml file")
-  writeFile filename (circuitToString circuit)
-  return ()
-
---- Circuit Modifiers ---
-
--- Helper for getting a Var type from a map
+-- Get a Var from a YAMLMap
 getVar :: Map String YAMLValue -> String -> Maybe Var
 getVar m paramName = case lookup paramName m of
   Just (YAMLString s) -> Just (Unknown (Parameter (ComponentID s)))
@@ -213,18 +270,3 @@ getCircuit m = do
   nodes <- getNodes m
   components <- getComponents m
   pure (Circuit nodes components)
-
-c :: Circuit
-c =
-  Circuit
-    { nodes =
-        fromList
-          [ (NodeID "n1", Node {nodeID = NodeID "n1", nodeVoltage = Unknown (Parameter (ComponentID "n1"))}),
-            (NodeID "n2", Node {nodeID = NodeID "n2", nodeVoltage = Unknown (Parameter (ComponentID "n1"))})
-          ],
-      components =
-        fromList
-          [ (ComponentID "r1", Component {componentID = ComponentID "r1", componentType = Resistor {resistance = Known 100.0}, current = Unknown (Parameter (ComponentID "i_r1")), nodePos = NodeID "n1", nodeNeg = NodeID "n2"}),
-            (ComponentID "v1", Component {componentID = ComponentID "v1", componentType = VSource {voltage = Known 5.0}, current = Unknown (Parameter (ComponentID "i_r1")), nodePos = NodeID "n2", nodeNeg = NodeID "n1"})
-          ]
-    }
