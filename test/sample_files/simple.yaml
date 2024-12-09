@@ -1,18 +1,18 @@
 nodes:
- - id: n1
-   voltage: n1
- - id: n2
-   voltage: n1
+  - id: n1
+    voltage: n1
+  - id: n2
+    voltage: n2
 components:
- - id: r1
-   current: i_r1
-   pos: n1
-   neg: n2
-   type: resistor
-   resistance: 100.0
- - id: v1
-   current: i_r1
-   pos: n2
-   neg: n1
-   type: voltage
-   voltage: 5.0
+  - id: r1
+    current: i_r1
+    pos: n1
+    neg: n2
+    type: resistor
+    resistance: 100.0
+  - id: v1
+    current: i_r1
+    pos: n1
+    neg: n2
+    type: voltage
+    voltage: 5.0
