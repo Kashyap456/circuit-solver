@@ -1,6 +1,4 @@
 module YamlParserTest where
-
-import YamlParser (YAMLValue(..), parseYAMLFile)
 import qualified Data.Map as Map
 import Test.HUnit
 import Test.QuickCheck (Gen, Arbitrary (arbitrary), elements, listOf)
@@ -8,7 +6,6 @@ import Test.QuickCheck qualified as QC
 
 --- UNIT TESTCASES ---
 import Data.Map qualified as Map
-import Test.HUnit
 import YamlParser
 
 compareYAML :: String -> YAMLValue -> IO ()
