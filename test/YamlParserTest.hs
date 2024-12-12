@@ -3,11 +3,13 @@ import qualified Data.Map as Map
 import Test.HUnit
 import Test.QuickCheck (Gen, Arbitrary (arbitrary), elements, listOf)
 import Test.QuickCheck qualified as QC
+import Data.Map qualified as Map
+import YamlParser ( YAMLValue(..), parseYAMLFile, parseYAML )
+import Data.Map (Map)
+import qualified Data.List as List
+import Text.Parsec (runParser)
 
 --- UNIT TESTCASES ---
-import Data.Map qualified as Map
-import YamlParser
-
 compareYAML :: String -> YAMLValue -> IO ()
 compareYAML filename expected = do
   result <- parseYAMLFile filename
@@ -53,6 +55,46 @@ parseSimpleTest =
 parseEmptyTest :: Test
 parseEmptyTest = "Parse Empty" ~: compareYAML "test/sample_files/empty.yaml" YAMLNull
 
+--- YAMLValue to String ---
+
+isSpecial :: YAMLValue -> Bool
+isSpecial yaml = case yaml of
+  YAMLList _ -> True
+  YAMLMap _ -> True
+  _ -> False
+
+getIndentation :: Int -> String
+getIndentation n = replicate n ' '
+
+convertYAMLValueToString :: YAMLValue -> Int -> String
+convertYAMLValueToString yaml indentation =
+  let spaces = getIndentation indentation in
+    case yaml of
+      YAMLString s -> spaces ++ s ++ "\n"
+      YAMLDouble d -> spaces ++ show d ++ "\n"
+      YAMLList l -> convertYAMLListToString l indentation
+      YAMLMap m -> convertYAMLMapToString m indentation
+      _ -> ""
+
+convertKeyValueToString :: String -> YAMLValue -> Int -> String
+convertKeyValueToString k v indent =
+  let special = isSpecial v in
+    let keyStr = getIndentation indent ++ k ++ ":" ++ (if special then "\n" else " ") in
+      let valueStr = convertYAMLValueToString v (if special then indent + 1 else 0) in
+        keyStr ++ valueStr
+
+convertYAMLMapToString :: Map String YAMLValue -> Int -> String
+convertYAMLMapToString m indent = Map.foldrWithKey f "" m where
+  f k v acc = convertKeyValueToString k v indent ++ acc
+
+convertYAMLListToString :: [YAMLValue] -> Int -> String
+convertYAMLListToString l indent = List.foldr f "" l where
+  f v acc =
+    let vStr = case v of
+          YAMLMap m -> convertYAMLMapToString m (indent + 1)
+          YAMLList l' -> convertYAMLListToString l' (indent + 1)
+          _ -> convertYAMLValueToString v 0 in
+      getIndentation indent ++ "-" ++ (if isSpecial v then "\n" else " ") ++ vStr ++ acc
 
 --- GENERATORS ---
 genSafeChar :: Gen Char
@@ -81,27 +123,35 @@ genSmallList g = do
 
 genYAMLList :: Gen YAMLValue
 genYAMLList = do
-    elts <- genSmallList genYAMLValue
+    elts <- genSmallList arbitrary
     return (YAMLList elts)
 
 genKeyValuePair :: Gen (String, YAMLValue)
 genKeyValuePair = do
     key <- genSafeString
-    value <- genYAMLValue
+    value <- arbitrary
     return (key, value)
-
 
 genYAMLMap :: Gen YAMLValue
 genYAMLMap = do
     elts <- genSmallList genKeyValuePair
     return (YAMLMap (Map.fromList elts))
 
-
-genYAMLValue :: Gen YAMLValue
-genYAMLValue =
-    QC.frequency [
+instance Arbitrary YAMLValue where
+  arbitrary :: Gen YAMLValue
+  arbitrary = QC.frequency [
         (4, genYAMLString),
         (4, genYAMLDouble),
         (2, genYAMLList),
         (2, genYAMLMap)
     ]
+  shrink :: YAMLValue -> [YAMLValue]
+  shrink v = case v of
+    YAMLString s -> []
+    YAMLDouble d -> map YAMLDouble (QC.shrink d)
+    YAMLList l -> map (\x -> if null x then YAMLNull else YAMLList x) (QC.shrinkList QC.shrink l)
+    YAMLMap m -> map (\x -> if null x then YAMLNull else YAMLMap (Map.fromList x)) (QC.shrinkList QC.shrink (Map.toList m))
+    YAMLNull -> [YAMLNull]
+
+prop_roundtrip :: YAMLValue -> Bool
+prop_roundtrip v = runParser (parseYAML True) 0 "" (convertYAMLValueToString v 0) == Right v
