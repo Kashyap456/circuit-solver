@@ -37,14 +37,13 @@ main = go initialCircuit
             (\e -> putStrLn ("Error: " ++ show e))
           go state
         Just ("validate", args) -> do
-          let result = validate state
+          let result = validate state (case args of x : _ -> x == "-r"; _ -> False)
            in do
-                putStrLn ("Circuit is " ++ (if isNothing result then "invalid" else "valid"))
                 case result of
-                  Just c -> case args of
-                    x : xs -> go (if x == "-r" then c else state)
-                    _ -> go state
-                  _ -> go state
+                  Left errs -> do
+                    putStrLn $ "Errors: " ++ show errs
+                    go state
+                  Right c -> go c
         Just ("addNode", args) -> do
           c <- case args of
             [] -> addNode state Nothing Nothing

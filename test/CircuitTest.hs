@@ -112,9 +112,9 @@ prop_nonEmpty (Circuit ns cs) =
 -- Node IDs in components should exist in nodes map
 prop_nodeExists :: Circuit -> Bool
 prop_nodeExists c@(Circuit ns cs) =
-  case validate c of
-    Nothing -> True
-    Just _ ->
+  case validate c False of
+    Left _ -> True
+    Right _ ->
       all
         ( \comp ->
             Map.member (nodePos comp) ns
@@ -125,9 +125,9 @@ prop_nodeExists c@(Circuit ns cs) =
 -- A validated circuit should maintain its structure
 prop_validatePreservesStructure :: Circuit -> Property
 prop_validatePreservesStructure c =
-  case validate c of
-    Nothing -> property True
-    Just c' ->
+  case validate c True of
+    Left _ -> property True
+    Right c' ->
       nodes c'
         `Map.isSubmapOf` nodes c
         .&&. components c'
