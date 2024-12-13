@@ -9,6 +9,9 @@ import System.IO qualified as IO
 import Text.Parsec (ParsecT, modifyState, putState, runParserT)
 import Text.ParserCombinators.Parsec
 import Text.Read
+import qualified System.IO.Error as IO
+import Text.Parsec.Error
+import Text.Parsec.Pos (newPos)
 
 -- Keep track of the number of indents that are made
 type Indentation = Int
@@ -153,12 +156,18 @@ parseYAML setIndentation = do
 
 -- Parses the given YAML file.
 parseYAMLFile :: FilePath -> IO (Either ParseError YAMLValue)
-parseYAMLFile filename = do
-  handle <- IO.openFile filename IO.ReadMode
-  str <- IO.hGetContents handle
-  if null str
-    then return (Right YAMLNull)
-    else pure $ runParser (parseYAML True <* eof) 0 "" str
+parseYAMLFile filename = 
+  IO.catchIOError 
+    (do
+      handle <- IO.openFile filename IO.ReadMode
+      str <- IO.hGetContents handle
+      if null str
+        then return (Right YAMLNull)
+        else pure $ runParser (parseYAML True <* eof) 0 "" str)
+    (\e -> 
+      let msg = Message ("Error: " ++ show e) in
+        let pos = newPos filename 0 0 in
+          pure $ Left $ newErrorMessage msg pos)
 
 --- Extractors ---
 
