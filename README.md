@@ -20,6 +20,7 @@ This folder contains all the source files:
 
 ### Test
 This folder contains all of the test files:
+  - **TestCommons.hs** defines some common functions used within the other test files.
   - **CircuitGraphTest.hs** tests *CircuitGraph.hs* and *Path.hs*. It has unit test cases for path operations.  
   - **CircuitTest.hs** defines an arbitrary instance for circuits and several QuickCheck properties. For example, we have properties that test roundtrip properties and check valid circuit structure.
   - **E2ETests.hs** is a simple unit test case that checks the entire process of loading a circuit from a file, constructing its equations, and solving them.
