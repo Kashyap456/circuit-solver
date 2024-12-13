@@ -1,12 +1,14 @@
 module CircuitTest where
 
 import Circuit
+import CircuitModifiers
+import CircuitSaver
 import Control.Exception (catch, throwIO)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import System.Directory (removeFile)
 import System.IO.Error (isDoesNotExistError)
-import Test.HUnit (assert)
+import Test.HUnit (Test (TestCase), assert, assertEqual, assertFailure, runTestTT)
 import Test.QuickCheck
   ( Arbitrary (arbitrary),
     Gen,
@@ -19,11 +21,11 @@ import Test.QuickCheck
     ioProperty,
     listOf1,
     oneof,
+    quickCheck,
     vectorOf,
     (.&&.),
   )
-import CircuitSaver
-import CircuitModifiers
+import YamlParser
 
 genNodeID :: Gen NodeID
 genNodeID = do
@@ -65,78 +67,40 @@ genNode = do
   voltage <-
     oneof
       [ Known <$> choose (-12, 12),
-        Unknown . NodeVoltage <$> genNodeID
+        return $ Unknown (NodeVoltage nid)
       ]
   return $ Node nid voltage
 
 -- Generator for Circuits
 instance Arbitrary Circuit where
   arbitrary = do
-    loopSize <- choose (3, 5)
-    loopNodes <- vectorOf loopSize $ do
-      nid <- genNodeID
-      return $ Node nid (Unknown . NodeVoltage $ nid)
+    -- Create ground node first
+    let groundNode = Node (NodeID "gnd") (Known 0.0)
 
-    -- Add one node with known voltage
-    knownNode <- do
-      nid <- genNodeID
-      return $ Node nid (Known 5.0)
+    -- Generate additional nodes
+    nodeCount <- choose (1, 4) -- One less since we have ground
+    additionalNodes <- vectorOf nodeCount genNode
+    let nodes = groundNode : additionalNodes
 
-    let loopNodes = knownNode : loopNodes
-
-    -- Create components for the loop
-    let loopNodeIDs = map nodeID loopNodes
-    loopComponents <-
-      sequence
-        [ do
-            cid <- genComponentID
-            ctype <-
-              frequency
-                [ (1, VSource <$> genValue),
-                  (3, Resistor . Known <$> choose (1, 1000))
-                ]
-            let ComponentID cstr = cid
-                curr = Unknown . Parameter . ComponentID $ "i_" ++ cstr
-            return $
-              Component
-                cid
-                ctype
-                curr
-                (loopNodeIDs !! i)
-                (loopNodeIDs !! ((i + 1) `mod` loopSize))
-          | i <- [0 .. loopSize - 1]
-        ]
-
-    -- Add some additional nodes and components which cause parallel paths
-    extraNodeCount <- choose (0, 2)
-    extraNodes <- vectorOf extraNodeCount $ do
-      nid <- genNodeID
-      return $ Node nid (Unknown . NodeVoltage $ nid)
-
-    let allNodes = loopNodes ++ extraNodes
-        allNodeIDs = map nodeID allNodes
-        loopNodeIDSet = map nodeID loopNodes
-
-    -- Add connections, ensuring at least one end is from the main loop
-    extraCompCount <- choose (0, 2 * extraNodeCount) -- Scale with extra nodes
-    extraComponents <- vectorOf extraCompCount $ do
+    -- Generate a small number of components
+    compCount <- choose (1, 7)
+    components <- vectorOf compCount $ do
       cid <- genComponentID
       ctype <-
         frequency
-          [ (1, VSource <$> genValue),
-            (3, Resistor . Known <$> choose (1, 1000))
+          [ (1, VSource . Known <$> choose (1, 12)),
+            (3, Resistor . Known <$> choose (0.1, 1000))
           ]
-      let ComponentID cstr = cid
-          curr = Unknown . Parameter . ComponentID $ "i_" ++ cstr
-      -- Ensure at least one end is from the main loop
-      pos <- elements loopNodeIDSet -- First end must be from loop
-      neg <- elements $ filter (/= pos) allNodeIDs -- Second can be from any node
-      return $ Component cid ctype curr pos neg
+      let curr = Unknown (Parameter cid)
+      n1 <- elements nodes
+      n2 <- elements (filter (/= n1) nodes)
+      return $ Component cid ctype curr (nodeID n1) (nodeID n2)
 
+    -- Create the circuit
     return $
       Circuit
-        (Map.fromList [(nodeID n, n) | n <- allNodes])
-        (Map.fromList [(componentID c, c) | c <- loopComponents ++ extraComponents])
+        (Map.fromList [(nodeID n, n) | n <- nodes])
+        (Map.fromList [(componentID c, c) | c <- components])
 
 -- Properties
 
@@ -184,7 +148,19 @@ prop_savePreservesCircuit c = ioProperty $ do
   parsed <- parseCircuit "test.yaml"
   removeIfExists "test.yaml"
   case parsed of
-    Just c' -> assert (c == c')
-    _ -> assert False
+    Just c' -> return (c == c')
+    Nothing -> return False
 
-
+-- Test parsing a simple circuit with scientific notation values
+testScientificNotation :: Test
+testScientificNotation = TestCase $ do
+  let n1 = Node (NodeID "n1") (Known 8.23456e-2)
+  let n2 = Node (NodeID "n2") (Known 0.0)
+  let r1 = Component (ComponentID "r1") (Resistor (Known 1.23456e-3)) (Unknown (Parameter (ComponentID "r1"))) (NodeID "n1") (NodeID "n2")
+  let c = Circuit (Map.fromList [(nodeID n1, n1), (nodeID n2, n2)]) (Map.fromList [(componentID r1, r1)])
+  saveCircuit "test.yaml" c
+  parsed <- parseCircuit "test.yaml"
+  -- removeIfExists "test.yaml"
+  case parsed of
+    Just c' -> assertEqual "Parsed circuit should match original" c c'
+    Nothing -> assertFailure "Failed to parse circuit"

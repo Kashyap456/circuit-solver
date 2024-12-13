@@ -6,12 +6,12 @@ import Data.Char
 import Data.Map (Map, fromList)
 import Data.Text (pack, stripEnd, unpack)
 import System.IO qualified as IO
+import System.IO.Error qualified as IO
 import Text.Parsec (ParsecT, modifyState, putState, runParserT)
-import Text.ParserCombinators.Parsec
-import Text.Read
-import qualified System.IO.Error as IO
 import Text.Parsec.Error
 import Text.Parsec.Pos (newPos)
+import Text.ParserCombinators.Parsec
+import Text.Read
 
 -- Keep track of the number of indents that are made
 type Indentation = Int
@@ -37,7 +37,7 @@ trim s = unpack $ stripEnd $ pack s
 
 -- Check if a character is not a special character.
 validChar :: Char -> Bool
-validChar c = c /= '\n' && c /= '-' && c /= ':'
+validChar c = c /= '\n' && c /= '-' && c /= ':' && (isAlphaNum c || c == '.' || c == 'e' || c == '+' || c == '-')
 
 --- CHAR PARSERS ---
 
@@ -65,7 +65,7 @@ parseLine = do
   sp <- parseWS
   text <- many1 (try (satisfy validChar))
   try parseEnd
-  return (trim text)
+  return $ trim text
 
 -- Parses the indention of a string and updates the state.
 parseIndentation :: IParser String
@@ -99,10 +99,29 @@ parseString = YAMLString <$> parseLine
 -- Parses a double. Throws error if read value cannot be converted.
 parseDouble :: IParser YAMLValue
 parseDouble = do
-  line <- parseLine
-  case readMaybe line :: Maybe Double of
+  sp <- parseWS
+  num <- try parseScientific
+  try parseEnd
+  case readMaybe num :: Maybe Double of
     Just d -> return (YAMLDouble d)
     Nothing -> fail "Not double"
+
+-- Parse a scientific notation number
+parseScientific :: IParser String
+parseScientific = do
+  digits1 <- many1 digit
+  dot <- optionMaybe (char '.')
+  digits2 <- case dot of
+    Just _ -> many1 digit
+    Nothing -> return ""
+  e <- optionMaybe (oneOf "eE")
+  case e of
+    Just _ -> do
+      sign <- optionMaybe (oneOf "+-")
+      exp <- many1 digit
+      let signStr = maybe "" (: []) sign
+      return $ digits1 ++ maybe "" (: []) dot ++ digits2 ++ "e" ++ signStr ++ exp
+    Nothing -> return $ digits1 ++ maybe "" (: []) dot ++ digits2
 
 -- Parses a single item within a YAML list.
 parseListItem :: IParser YAMLValue
@@ -156,18 +175,20 @@ parseYAML setIndentation = do
 
 -- Parses the given YAML file.
 parseYAMLFile :: FilePath -> IO (Either ParseError YAMLValue)
-parseYAMLFile filename = 
-  IO.catchIOError 
-    (do
-      handle <- IO.openFile filename IO.ReadMode
-      str <- IO.hGetContents handle
-      if null str
-        then return (Right YAMLNull)
-        else pure $ runParser (parseYAML True <* eof) 0 "" str)
-    (\e -> 
-      let msg = Message ("Error: " ++ show e) in
-        let pos = newPos filename 0 0 in
-          pure $ Left $ newErrorMessage msg pos)
+parseYAMLFile filename =
+  IO.catchIOError
+    ( do
+        handle <- IO.openFile filename IO.ReadMode
+        str <- IO.hGetContents handle
+        if null str
+          then return (Right YAMLNull)
+          else pure $ runParser (parseYAML True <* eof) 0 "" str
+    )
+    ( \e ->
+        let msg = Message ("Error: " ++ show e)
+         in let pos = newPos filename 0 0
+             in pure $ Left $ newErrorMessage msg pos
+    )
 
 --- Extractors ---
 

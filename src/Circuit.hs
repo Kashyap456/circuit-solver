@@ -67,9 +67,19 @@ instance Show Component where
           Known v -> show v
           Unknown _ -> "?"
         typeStr = case componentType comp of
-          VSource _ -> "V"
-          Resistor _ -> "R"
-     in typeStr ++ " " ++ cid ++ " (-): " ++ neg ++ " (+): " ++ pos ++ " I: " ++ curr
+          VSource v ->
+            "V("
+              ++ case v of
+                Known val -> show val ++ "V"
+                Unknown _ -> "?"
+              ++ ")"
+          Resistor r ->
+            "R("
+              ++ case r of
+                Known val -> show val ++ "Ω"
+                Unknown _ -> "?"
+              ++ ")"
+     in cid ++ " " ++ typeStr ++ " (-): " ++ neg ++ " (+): " ++ pos ++ " I: " ++ curr
 
 data Node = Node
   { nodeID :: NodeID,

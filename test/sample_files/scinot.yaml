@@ -1,0 +1,12 @@
+nodes:
+ - id: n1
+   voltage: 8.23456e-2
+ - id: n2
+   voltage: 0.0
+components:
+ - id: r1
+   current: r1
+   pos: n1
+   neg: n2
+   type: resistor
+   resistance: 1.23456e-3

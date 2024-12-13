@@ -89,15 +89,19 @@ getVar m paramName context = case lookup paramName m of
   Just (YAMLString s) ->
     case context of
       "node" -> Just (Unknown (NodeVoltage (NodeID s)))
-      "component" -> Just (Unknown (Parameter (ComponentID s)))
+      "component" ->
+        -- try and read current/resistance as a number
+        case reads s :: [(Double, String)] of
+          [(n, "")] -> Just (Known n)
+          _ -> Just (Unknown (Parameter (ComponentID s)))
       _ -> Nothing
   Just (YAMLDouble d) -> Just (Known d)
+  Just (YAMLList [YAMLDouble d]) -> Just (Known (-d))
   _ -> Nothing
 
 -- Given a map of the component
 getComponentType :: Map String YAMLValue -> Maybe ComponentType
 getComponentType m = do
-  id <- lookup "id" m >>= extractString
   t <- lookup "type" m >>= extractString
   ( case t of
       "voltage" -> f "voltage" VSource
@@ -113,6 +117,7 @@ getComponentType m = do
 getNode :: Map String YAMLValue -> Maybe Node
 getNode m = do
   id <- lookup "id" m >>= extractString
+  let voltageVal = lookup "voltage" m
   voltage <- getVar m "voltage" "node"
   pure (Node (NodeID id) voltage)
 
@@ -122,7 +127,7 @@ getNodes m =
     then Nothing
     else do
       l <- lookup "nodes" m >>= extractList
-      return (fromList (List.foldr f [] l))
+      return $ fromList (List.foldr f [] l)
   where
     f x acc = case extractMap x of
       Just m -> case getNode m of
