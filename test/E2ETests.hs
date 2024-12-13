@@ -3,9 +3,9 @@ module E2ETests where
 import Circuit
   ( ComponentID (ComponentID),
     NodeID (NodeID),
-    Unknown (Parameter),
-    parseCircuit,
+    Unknown (Parameter)
   )
+import CircuitSaver (parseCircuit)
 import CircuitGraph (buildTopology, findLoopPathsFromNode)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)

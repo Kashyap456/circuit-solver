@@ -22,6 +22,8 @@ import Test.QuickCheck
     vectorOf,
     (.&&.),
   )
+import CircuitSaver
+import CircuitModifiers
 
 genNodeID :: Gen NodeID
 genNodeID = do
