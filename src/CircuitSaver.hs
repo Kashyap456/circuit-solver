@@ -1,4 +1,5 @@
-module Circuit 
+{-# LANGUAGE MonoLocalBinds #-}
+module CircuitSaver 
     (
         parseCircuit,
         saveCircuit
@@ -21,6 +22,7 @@ parseCircuit filename = do
   parsedYAML <- parseYAMLFile filename
   case parsedYAML of
     Right (YAMLMap m) -> return (getCircuit m)
+    Right YAMLNull -> return (Just (Circuit Map.empty Map.empty))
     _ -> return Nothing
 
 -- Saves a circuit to a YAML file
@@ -68,7 +70,7 @@ componentsToString components = "components:\n" ++ foldrWithKey f "" components
            in let (NodeID negID) = nodeNeg comp
                in " - id: "
                     ++ id
-                    ++ "\n   circuit: "
+                    ++ "\n   current: "
                     ++ varToString (current comp)
                     ++ "\n   pos: "
                     ++ posID
