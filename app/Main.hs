@@ -8,7 +8,9 @@ import CircuitSaver (parseCircuit, saveCircuit)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Maybe
+import Solver (solve)
 import System.IO.Error qualified as IO
+import TestCommons (printSolution)
 import Text.Read (readMaybe)
 
 initialCircuit :: Circuit
@@ -77,11 +79,18 @@ main = go initialCircuit
         Just ("setNodes", id : pos : neg : _) -> do
           c <- updateComponentNodes state (ComponentID id) (NodeID pos) (NodeID neg)
           go c
+        Just ("printCircuit", _) -> do
+          print state
+          go state
+        Just ("solve", _) -> do
+          putStrLn (printSolution (solve state))
+          go state
         Just ("help", _) -> do
           putStrLn "load <filename>: Load a circuit based on the specified file"
           putStrLn "save <filename>: Save the current circuit to the specified file"
+          putStrLn "printCircuit: Print the current circuit"
           putStrLn "validate [-r]: Check if the current circuit is valid. Use -r to remove floating nodes"
-          putStrLn "addNode [id] [voltage]: Add a node to the current circuit"
+          putStrLn "addNode [id] [voltage]: Add a node to the current circuit. Voltage becomes unknown if not specified"
           putStrLn "deleteNode <id>: Delete a node from the current circuit"
           putStrLn "addComponent <R|V> <posID> <negID> [current] [value]: Add a component to the current circuit"
           putStrLn "deleteComponent <id>: Delete a component from the current circuit"
@@ -89,6 +98,7 @@ main = go initialCircuit
           putStrLn "setCurrent <id> [value]: Set a component's current"
           putStrLn "setValue <id> [value]: Set a component's specific value"
           putStrLn "setNodes <id> <posID> <negID>: Set a component's positive and negative nodes"
+          putStrLn "solve: Attempt to solve the current circuit"
           go state
         _ -> do
           putStrLn "Invalid command."

@@ -40,8 +40,9 @@ printSolution :: Map.Map Unknown Double -> String
 printSolution sol =
   "Solution:\n"
     ++ concatMap
-      ( \(k, v) -> case k of
-          NodeVoltage (NodeID n) -> "V_" ++ n ++ " = " ++ show v ++ "V\n"
-          Parameter (ComponentID p) -> p ++ " = " ++ show v ++ "A\n"
+      ( \(k, v) ->
+          case k of
+            NodeVoltage (NodeID n) -> "V_" ++ n ++ " = " ++ show v ++ "V\n"
+            Parameter (ComponentID p) -> p ++ " = " ++ show v ++ "A\n"
       )
       (Map.toList sol)

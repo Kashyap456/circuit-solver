@@ -2,7 +2,7 @@ nodes:
   - id: n1
     voltage: n1
   - id: n2
-    voltage: n2
+    voltage: 0.0
 components:
   - id: r1
     current: i_r1

@@ -6,6 +6,7 @@ import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
+import Debug.Trace (trace)
 import Numeric.LinearAlgebra qualified as LA
 import Path (Path, pathComponents, pathNodes)
 

@@ -15,7 +15,7 @@ module Circuit
     components,
     componentType,
     current,
-    nodeVoltage
+    nodeVoltage,
   )
 where
 
@@ -56,16 +56,52 @@ data Component = Component
     nodePos :: NodeID,
     nodeNeg :: NodeID
   }
-  deriving (Show, Eq)
+  deriving (Eq)
+
+instance Show Component where
+  show comp =
+    let (ComponentID cid) = componentID comp
+        (NodeID pos) = nodePos comp
+        (NodeID neg) = nodeNeg comp
+        curr = case current comp of
+          Known v -> show v
+          Unknown _ -> "?"
+        typeStr = case componentType comp of
+          VSource _ -> "V"
+          Resistor _ -> "R"
+     in typeStr ++ " " ++ cid ++ " (-): " ++ neg ++ " (+): " ++ pos ++ " I: " ++ curr
 
 data Node = Node
   { nodeID :: NodeID,
     nodeVoltage :: Var
   }
-  deriving (Show, Eq)
+  deriving (Eq)
+
+instance Show Node where
+  show node =
+    let (NodeID nid) = nodeID node
+        v = case nodeVoltage node of
+          Known val -> show val
+          Unknown _ -> "?"
+     in nid ++ " V: " ++ v
 
 data Circuit = Circuit
   { nodes :: Map NodeID Node,
     components :: Map ComponentID Component
   }
-  deriving (Show, Eq)
+  deriving (Eq)
+
+instance Show Circuit where
+  show (Circuit nodes components) =
+    "Circuit {\n"
+      ++ "  Nodes:\n"
+      ++ showNodes (Map.toList nodes)
+      ++ "  Components:\n"
+      ++ showComponents (Map.toList components)
+      ++ "}"
+    where
+      showNodes [] = ""
+      showNodes ns = concatMap (\(_, n) -> "    " ++ show n ++ "\n") ns
+
+      showComponents [] = ""
+      showComponents cs = concatMap (\(_, c) -> "    " ++ show c ++ "\n") cs

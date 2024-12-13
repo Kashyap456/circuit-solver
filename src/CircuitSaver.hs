@@ -1,19 +1,20 @@
 {-# LANGUAGE MonoLocalBinds #-}
-module CircuitSaver 
-    (
-        parseCircuit,
-        saveCircuit
-    )
+
+module CircuitSaver
+  ( parseCircuit,
+    saveCircuit,
+  )
 where
+
 import Circuit
-import YamlParser
-import Data.Map (Map, fromList, foldrWithKey, notMember, lookup)
 import Control.Monad (when)
+import Data.List qualified as List
+import Data.Map (Map, foldrWithKey, fromList, lookup, notMember)
+import Data.Map qualified as Map
 import GHC.IO.IOMode (IOMode (WriteMode))
 import System.FilePath (takeExtension)
 import System.IO
-import Data.Map qualified as Map
-import qualified Data.List as List
+import YamlParser
 import Prelude hiding (lookup)
 
 -- Create circuit from a YAML file
@@ -83,9 +84,13 @@ componentsToString components = "components:\n" ++ foldrWithKey f "" components
 --- GETTERS ---
 
 -- Get a Var from a YAMLMap
-getVar :: Map String YAMLValue -> String -> Maybe Var
-getVar m paramName = case lookup paramName m of
-  Just (YAMLString s) -> Just (Unknown (Parameter (ComponentID s)))
+getVar :: Map String YAMLValue -> String -> String -> Maybe Var
+getVar m paramName context = case lookup paramName m of
+  Just (YAMLString s) ->
+    case context of
+      "node" -> Just (Unknown (NodeVoltage (NodeID s)))
+      "component" -> Just (Unknown (Parameter (ComponentID s)))
+      _ -> Nothing
   Just (YAMLDouble d) -> Just (Known d)
   _ -> Nothing
 
@@ -101,14 +106,14 @@ getComponentType m = do
     )
   where
     f paramName constructor = do
-      var <- getVar m paramName
+      var <- getVar m paramName "component"
       pure (constructor var)
 
 -- Gets a single node
 getNode :: Map String YAMLValue -> Maybe Node
 getNode m = do
   id <- lookup "id" m >>= extractString
-  voltage <- getVar m "voltage"
+  voltage <- getVar m "voltage" "node"
   pure (Node (NodeID id) voltage)
 
 getNodes :: (Ord NodeID) => Map String YAMLValue -> Maybe (Map NodeID Node)
@@ -129,7 +134,7 @@ getNodes m =
 getComponent :: Map String YAMLValue -> Maybe Component
 getComponent m = do
   id <- lookup "id" m >>= extractString
-  current <- getVar m "current"
+  current <- getVar m "current" "component"
   pos <- lookup "pos" m >>= extractString
   neg <- lookup "neg" m >>= extractString
   t <- getComponentType m
@@ -148,7 +153,6 @@ getComponents m =
         Just c -> (componentID c, c) : acc
         _ -> acc
       Nothing -> acc
-
 
 getCircuit :: (Ord NodeID, Ord ComponentID) => Map String YAMLValue -> Maybe Circuit
 getCircuit m = do
