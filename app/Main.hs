@@ -3,7 +3,7 @@
 module Main where
 
 import Circuit
-import CircuitModifiers (addComponent, addNode, updateNodeVoltage, validate, updateComponentCurrent, updateComponentValue, updateComponentNodes)
+import CircuitModifiers (addComponent, addNode, deleteComponent, deleteNode, updateComponentCurrent, updateComponentNodes, updateComponentValue, updateNodeVoltage, validate)
 import CircuitSaver (parseCircuit, saveCircuit)
 import Data.List qualified as List
 import Data.Map qualified as Map
@@ -49,6 +49,7 @@ main = go initialCircuit
             [id] -> addNode state (Just (NodeID id)) Nothing
             id : voltage : _ -> addNode state (Just (NodeID id)) (readMaybe voltage)
           go c
+        Just ("deleteNode", id : _) -> go (deleteNode state (NodeID id))
         Just ("addComponent", t : pos : neg : args) ->
           let isResistor = t == "R"
            in do
@@ -57,30 +58,33 @@ main = go initialCircuit
                   [i] -> addComponent state (NodeID pos) (NodeID neg) (readMaybe i) isResistor Nothing
                   i : v : _ -> addComponent state (NodeID pos) (NodeID neg) (readMaybe i) isResistor (readMaybe v)
                 go c
+        Just ("deleteComponent", id : _) -> go (deleteComponent state (ComponentID id))
         Just ("setNodeVoltage", id : args) ->
           let c = case args of
                 [] -> updateNodeVoltage state (NodeID id) Nothing
                 (v : _) -> updateNodeVoltage state (NodeID id) (readMaybe v)
            in go c
         Just ("setCurrent", id : args) -> do
-            c <- case args of
-                [] -> updateComponentCurrent state (ComponentID id) Nothing
-                (v : _) -> updateComponentCurrent state (ComponentID id) (readMaybe v)
-            go c
+          c <- case args of
+            [] -> updateComponentCurrent state (ComponentID id) Nothing
+            (v : _) -> updateComponentCurrent state (ComponentID id) (readMaybe v)
+          go c
         Just ("setValue", id : args) -> do
-            c <- case args of
-                [] -> updateComponentValue state (ComponentID id) Nothing
-                (v : _) -> updateComponentValue state (ComponentID id) (readMaybe v)
-            go c
+          c <- case args of
+            [] -> updateComponentValue state (ComponentID id) Nothing
+            (v : _) -> updateComponentValue state (ComponentID id) (readMaybe v)
+          go c
         Just ("setNodes", id : pos : neg : _) -> do
-            c <- updateComponentNodes state (ComponentID id) (NodeID pos) (NodeID neg)
-            go c
+          c <- updateComponentNodes state (ComponentID id) (NodeID pos) (NodeID neg)
+          go c
         Just ("help", _) -> do
           putStrLn "load <filename>: Load a circuit based on the specified file"
           putStrLn "save <filename>: Save the current circuit to the specified file"
           putStrLn "validate [-r]: Check if the current circuit is valid. Use -r to remove floating nodes"
           putStrLn "addNode [id] [voltage]: Add a node to the current circuit"
+          putStrLn "deleteNode <id>: Delete a node from the current circuit"
           putStrLn "addComponent <R|V> <posID> <negID> [current] [value]: Add a component to the current circuit"
+          putStrLn "deleteComponent <id>: Delete a component from the current circuit"
           putStrLn "setNodeVoltage <id> [value]: Set a node's voltage"
           putStrLn "setCurrent <id> [value]: Set a component's current"
           putStrLn "setValue <id> [value]: Set a component's specific value"
