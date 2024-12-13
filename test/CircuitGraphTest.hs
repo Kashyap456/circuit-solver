@@ -30,7 +30,7 @@ simpleLoopCircuit =
   let n1 = Node (NodeID "n1") (Unknown (NodeVoltage (NodeID "n1")))
       n2 = Node (NodeID "n2") (Unknown (NodeVoltage (NodeID "n2")))
       r1 = Component (ComponentID "r1") (Resistor (Known 100.0)) (Unknown (Parameter (ComponentID "i_r1"))) (NodeID "n1") (NodeID "n2")
-      v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n2") (NodeID "n1")
+      v1 = Component (ComponentID "v1") (VSource (Known 5.0)) (Unknown (Parameter (ComponentID "i_v1"))) (NodeID "n1") (NodeID "n2")
    in Circuit (Map.fromList [(NodeID "n1", n1), (NodeID "n2", n2)]) (Map.fromList [(ComponentID "r1", r1), (ComponentID "v1", v1)])
 
 simpleParallelCircuit :: Circuit
